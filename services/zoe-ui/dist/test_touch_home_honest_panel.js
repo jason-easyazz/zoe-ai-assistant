@@ -181,7 +181,7 @@ const run = (box, code) => vm.runInContext(code, box);
       if (!/var secs=guest\?\[\s*\{t:'This panel'[^\n]*\n\s*\{t:'System'[^\n]*\n\s*\{t:'Everything else'[^\n]*sign in for the rest[^\n]*\n\s*\]:/.test(blk)) bad.push('guest sections are not exactly panel, system, how to get the rest');
       if (!near(s, 'function wirePanelSettings(){', 900).includes('if(_setGuest()){')) bad.push('the panel rows are editable for a guest');
       if (/ink-faint[^'"]*["'][^>]*>[^<]*(Couldn’t|unavailable|Loading)/.test(blk)) bad.push('faint state copy in Settings');
-      if (!/function orbPress\(idlePrompt\)[\s\S]{0,400}orb\.addEventListener\('click',function\(\)\{orbPress\(\);\}\)/.test(s)) bad.push('the orb and Settings do not share one press path');
+      if (!/function orbPress\(idlePrompt\)[\s\S]{0,600}orb\.addEventListener\('click',function\(\)\{orbPress\(\);\}\)/.test(s)) bad.push('the orb and Settings do not share one press path');
       return bad;
     },
     smallWallText(t) {

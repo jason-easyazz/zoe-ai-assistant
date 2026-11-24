@@ -82,6 +82,7 @@
             '#zvs-card .zrc-tap{cursor:pointer;min-height:48px}' +
             '#zvs-card .zrc-tap .zvs-rt::after{content:" \\203A";color:var(--ink-faint,rgba(244,246,250,.48))}' +
             '#zvs-card .zrc-all{margin-top:12px}' +
+            '#zvs-card .zrc-m.zrc-full{font-size:17px;color:var(--ink,#F4F6FA)}' +
             '#zvs-card .zrc-r.zrc-soft .zvs-rt{opacity:.72;font-style:italic}' +
             '#zvs-card .zrc-d{display:block;font-size:16px;color:var(--ink,#F4F6FA);margin-top:4px}' +
             '#zvs-card .zrc-qr{width:176px;height:176px;border-radius:12px;background:#fff;padding:6px}' +
@@ -118,7 +119,9 @@
                 main.setAttribute('data-open', String(it.open || 'detail'));
                 main.addEventListener('click', function () {
                     if (it.open) { emit('zoe:card-open', { target: String(it.open), kind: String(d.kind || '') }); return; }
-                    if (metaEl) metaEl.textContent = String(it.detail);
+                    if (!metaEl) { metaEl = el('span', 'zrc-m', ''); main.appendChild(metaEl); }
+                    metaEl.textContent = String(it.detail);
+                    metaEl.className = 'zrc-m zrc-full';
                 });
             }
             row.appendChild(main);

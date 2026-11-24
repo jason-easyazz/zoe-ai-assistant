@@ -298,6 +298,9 @@ async def pending_inbox(user: dict = Depends(resolve_acting_user)):
     anyone = await notifications_store.orb_any(user)
     if anyone is not None:
         state = {**state, "notify_any": bool(anyone)}
+    # The press with no voice (ZOE_NOTIFICATIONS_PANEL_TOUCH): the page learns it here, in the poll it already makes. Off = absent.
+    if notifications_store.orb_touch():
+        state = {**state, "notify_touch": True}
     return state
 
 

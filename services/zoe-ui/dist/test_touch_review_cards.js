@@ -349,7 +349,7 @@ const LOOPS = { panel_id: P, member_id: 'casey', kind: 'open_loops', private: tr
   const FRAME = { status: 200, json: LIST };
   const opens = (o) => o.log.zf.filter((c) => c.url === NOTE + '/open');
   async function pressShowsTheList(html) {              // dot lit by notifications: the press shows the list, the mic stays shut
-    for (const inbox of [{ notify_any: true }, { enabled: false, count: 0, notify: 2 }]) {
+    for (const inbox of [{ notify_any: true, notify_touch: true }, { enabled: false, count: 0, notify: 2, notify_touch: true }]) {
       let open = false;
       const o = orbBoot(html, inbox, FRAME, () => open);
       await flush(); await flush();
@@ -369,21 +369,21 @@ const LOOPS = { panel_id: P, member_id: 'casey', kind: 'open_loops', private: tr
     }
   }
   async function pressFallsBack(html) {                 // nothing to list / refused / no dot / a selector item: as before
-    let o = orbBoot(html, { notify_any: true }, { status: 200, json: { empty: true } }, () => false);
+    let o = orbBoot(html, { notify_any: true, notify_touch: true }, { status: 200, json: { empty: true } }, () => false);
     await flush(); await flush(); o.press(); await flush(); await flush(); await flush();
     assert(o.log.cards.length === 0 && o.log.voice.length === 1, 'an empty list listens');
-    o = orbBoot(html, { notify_any: true }, { status: 403, json: {} }, () => false);
+    o = orbBoot(html, { notify_any: true, notify_touch: true }, { status: 403, json: {} }, () => false);
     await flush(); await flush(); o.press(); await flush(); await flush(); await flush();
     assert(o.log.voice.length === 1 && /what's up/.test(o.log.voice[0]), 'a refused list asks for a voice');
-    o = orbBoot(html, { enabled: false, count: 0 }, FRAME, () => false);
+    o = orbBoot(html, { enabled: false, count: 0, notify_touch: true }, FRAME, () => false);
     await flush(); await flush(); o.press(); await flush();
     assert(opens(o).length === 0 && o.log.voice.length === 1, 'no dot: the press listens, as ever');
-    o = orbBoot(html, { enabled: true, count: 1 }, FRAME, () => false);
+    o = orbBoot(html, { enabled: true, count: 1, notify_touch: true }, FRAME, () => false);
     await flush(); await flush(); o.press(); await flush();
     assert(opens(o).length === 0 && o.log.fetched[0] === 'http://localhost:7777/pull', 'a selector item still pulls aloud');
   }
   async function listEventsReachTheEstate(html) {       // a cleared row re-reads the dot; a row tap opens its screen
-    const o = orbBoot(html, { notify_any: true }, FRAME, () => true);
+    const o = orbBoot(html, { notify_any: true, notify_touch: true }, FRAME, () => true);
     await flush(); await flush();
     const before = o.log.zf.filter((c) => c.url === '/api/proactive/inbox').length;
     o.emit('zoe:card-acted', { kind: 'notifications' });
@@ -395,11 +395,28 @@ const LOOPS = { panel_id: P, member_id: 'casey', kind: 'open_loops', private: tr
     o.emit('zoe:card-open', { target: '/people.html' });
     assert.deepStrictEqual(o.log.shown, ['reminder'], 'only an estate screen can be opened');
   }
-  for (const fn of [pressShowsTheList, pressFallsBack, listEventsReachTheEstate]) await fn(homeHtml);
-  await red(pressShowsTheList, plant(homeHtml, "if(free&&!listOpen()&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);",
-    "if(ready&&_dotVoiceOnly)panelVoice('Say \"what\\'s up?\" - I\\'ll check it\\'s you');"), 'the old press (a dot lit by notifications opens the mic)');
-  await red(pressShowsTheList, plant(homeHtml, "else if(ready&&!_dotVoiceOnly&&!listOpen())orbPull();", "else if(ready&&!_dotVoiceOnly)orbPull();")
-    .replace("if(free&&!listOpen()&&(", "if(free&&("), 'a list that swallows the mic for good');
+  async function flagOffIsTheOldPress(html) {           // ZOE_NOTIFICATIONS_PANEL_TOUCH off: the inbox has no notify_touch
+    for (const inbox of [{ notify_any: true }, { enabled: false, count: 0, notify: 2 }]) {
+      const o = orbBoot(html, inbox, FRAME, () => false);
+      await flush(); await flush();
+      o.press();                                        // NOT awaited: the mic must open in the same tick, with no round trip first
+      assert.strictEqual(opens(o).length, 0, 'flag off: the press never asks for the list');
+      assert.deepStrictEqual(o.log.voice, ['Say "what\'s up?" - I\'ll check it\'s you'], 'flag off: the old press, at once');
+      assert(o.log.cards.length === 0 && o.log.fetched.length === 0);
+    }
+    const o = orbBoot(html, { enabled: true, count: 1 }, FRAME, () => true);   // a card on screen changes nothing with the flag off
+    await flush(); await flush(); o.press(); await flush();
+    assert(opens(o).length === 0 && o.log.fetched[0] === 'http://localhost:7777/pull', 'flag off: a selector item pulls, as before');
+  }
+  for (const fn of [pressShowsTheList, pressFallsBack, listEventsReachTheEstate, flagOffIsTheOldPress]) await fn(homeHtml);
+  await red(flagOffIsTheOldPress, plant(homeHtml, "else if(_listOn&&free&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);",
+    "else if(free&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);"), 'a flag-off press that still asks the server');
+  await red(flagOffIsTheOldPress, plant(homeHtml, "_listOn=!!(d&&d.notify_touch===true);", "_listOn=true;"), 'a page that does not read the flag');
+  await red(pressShowsTheList, plant(homeHtml, "_listOn=!!(d&&d.notify_touch===true);", "_listOn=false;"), 'control: flag on but the page never learns it');
+  await red(pressShowsTheList, plant(homeHtml, "else if(_listOn&&free&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);", ''),
+    'the old press (a dot lit by notifications opens the mic)');
+  await red(pressShowsTheList, plant(homeHtml, "if(_listOn&&listOpen())panelVoice();\n    else if(_listOn&&free", "if(_listOn&&free"),
+    'a list that swallows the mic for good');
   await red(listEventsReachTheEstate, plant(homeHtml, "window.addEventListener('zoe:card-acted',function(){_orbPoll();});", ''), 'a dot that stays lit after a clear');
   await red(listEventsReachTheEstate, plant(homeHtml, "if(!FULL[t]&&!CARD[t])return;", ''), 'a row that can open anything');
 

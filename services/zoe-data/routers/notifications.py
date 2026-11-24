@@ -245,8 +245,9 @@ class _Open(BaseModel):
 
 async def _require_press(request: Request, caller=Depends(_caller)) -> tuple[str, str]:
     """WHO pressed the orb: ``("member", <their id>)`` for a member's own session, ``("panel", <panel id or "">)`` for the panel
-    itself (``_is_panel``). Anyone else - a guest session that is not the registered panel, a device token, an auth outage - is 403."""
-    if not _store.enabled():
+    itself (``_is_panel``). Anyone else - a guest session that is not the registered panel, a device token, an auth outage - is 403.
+    ``ZOE_NOTIFICATIONS_PANEL_TOUCH`` off = 404 for EVERY caller, a member's session included: the route is as if unmounted."""
+    if not _store.touch_enabled():
         raise HTTPException(status_code=404, detail="Not Found")
     if _store._member_session(caller):
         return "member", str(caller["user_id"])

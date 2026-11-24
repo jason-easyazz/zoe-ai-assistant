@@ -4496,7 +4496,7 @@
       var act=e.target.closest('[data-act]');
       if(act){var a=act.getAttribute('data-act');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();
         if(a==='pendlink')panelVoice('Say “Zoe, link my pendant” with it in your hand');
-        if(a==='notecard')orbPress('Nothing new — say “what’s up?” to hear the rest');
+        if(a==='notecard')orbPress(_listOn?'Nothing new — say “what’s up?” to hear the rest':'Say “what’s up?” and I’ll show them here');
         return;}
       if(e.target.closest('#setOut')){var out=e.target.closest('#setOut');out.disabled=true;
         function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e2){}try{sessionStorage.removeItem('zoe_gb');}catch(e2){}}
@@ -5304,7 +5304,9 @@
   // answers the card itself (a member session: their own; the kiosk: the household's wall-safe rows + one locked row), drawn by the
   // same js/touch-review-cards.js. Nothing is spoken and no mic opens. The mic stays one press away: with the list open, or with no
   // dot, the press listens as ever. Nothing to list (or a refusal) falls back to the listen.
-  var _pullT=null,_dotVoiceOnly=false,_dotNotes=false,_orbPoll=function(){};
+  // `_listOn` is the inbox poll's `notify_touch` (ZOE_NOTIFICATIONS_PANEL_TOUCH): absent = the press is EXACTLY the old one and
+  // /open is never asked - no round trip before the mic.
+  var _pullT=null,_dotVoiceOnly=false,_dotNotes=false,_listOn=false,_orbPoll=function(){};
   function orbList(idlePrompt){
     if(_convLive||_orbBusy)return;
     _orbBusy=true;orb.classList.add('busy');
@@ -5347,8 +5349,10 @@
   // ONE press path: the orb, and Settings › Notifications "Show the card" (with its own prompt when there is no dot to collect).
   function orbPress(idlePrompt){
     var free=!orb.classList.contains('busy')&&!orb.classList.contains('listening'),ready=free&&orb.classList.contains('has');
-    if(free&&!listOpen()&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);
-    else if(ready&&!_dotVoiceOnly&&!listOpen())orbPull();
+    if(_listOn&&listOpen())panelVoice();
+    else if(_listOn&&free&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);
+    else if(ready&&_dotVoiceOnly)panelVoice('Say "what\'s up?" - I\'ll check it\'s you');
+    else if(ready)orbPull();
     else panelVoice(idlePrompt||'Listening — ask Zoe anything');
   }
   orb.addEventListener('click',function(){orbPress();});
@@ -5366,6 +5370,7 @@
         .then(function(d){var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));
           var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);
           var any=!!(d&&!d.quiet&&d.notify_any===true);
+          _listOn=!!(d&&d.notify_touch===true);
           paint(mine||any,!!(d&&d.review===true&&!d.quiet),!pullable,any||!!(d&&!d.quiet&&d.notify>0));})
         .catch(function(){});
     }

@@ -37,18 +37,30 @@ reply and the brain stream are what they were before this feature (the stream is
 | store | `services/zoe-data/notifications_store.py` | `create` (deterministic id, `ON CONFLICT DO NOTHING`), `unread`, `unread_count`, `mark_read`; sensitivity rides in the row's `data` JSON (`{"sensitive": true}`), so no migration |
 | dot | `routers/proactive.py` `/api/proactive/inbox` | a member session gets `notify` (its OWN unread count); any other caller (the kiosk guest panel, a device token, a degraded session) gets only `notify_any`, a bare boolean; `dist/touch/home.html` paints the existing dot when the proactive count, `notify` or `notify_any` says so |
 | card | `notifications_store.card` / `push_card` | a private `voice_card` of kind `notifications`, minted with `panel_review_cards.mint`, drawn by the existing `js/touch-review-cards.js`; taps go to `POST /api/panel/notifications/act` (`routers/notifications.py`, `X-Panel-Card` header, `panel_review_cards.authorize`) |
-| orb press (no voice) | `POST /api/panel/notifications/open` (`routers/notifications.py`) -> `notifications_store.card` / `panel_card` | the press of a dot lit by notifications answers the card to THAT request (nothing pushed, nothing spoken, no mic): a member's own session gets their own card; the panel itself (the kiosk guest that `panel_principal.is_panel_guest` accepts, flag `ZOE_NOTIFICATIONS_PANEL_TOUCH`, default on) gets the panel's own card; anyone else 403. `home.html` `orbList` draws it through the same `zoe:voice-card` event. With the list open, or with no dot, the press listens |
+| orb press (no voice; `notify_touch` in the inbox poll) | `POST /api/panel/notifications/open` (`routers/notifications.py`) -> `notifications_store.card` / `panel_card` | the press of a dot lit by notifications answers the card to THAT request (nothing pushed, nothing spoken, no mic): a member's own session gets their own card; the panel itself (the kiosk guest that `panel_principal.is_panel_guest` accepts, flag `ZOE_NOTIFICATIONS_PANEL_TOUCH`, default on) gets the panel's own card; anyone else 403. `home.html` `orbList` draws it through the same `zoe:voice-card` event. With the list open, or with no dot, the press listens |
 | spoken pull | `fast_tiers._pull_tier` -> `notifications_store.pull_addendum` | "what's up?" (and the press of a dot lit by a selector item) runs today's spoken pull; when the turn's member has unread notifications the card goes to that panel and one sentence follows ("And three notifications on the screen."). With `ZOE_PROACTIVE_SELECTOR` off (its default) the pull answers nothing, so a VERIFIED member's voice turn gets the notification sentence alone (`fast_tiers._notifications_only_pull`); never a guest, an unverified voice or a dry replay |
 | tail | `services/zoe-data/notification_tail.py` | `note_voice_turn` (voice lane), `append_stream` (brain stream, `zoe_flue_client.py`), `append_to_reply` (deterministic tiers, `routers/voice_tts.py`), `tier` ("read them" / "later") |
 | first creator | `notifications_store.notify_wearer_proposals` | the pendant's wearer print has open proposals and no confirmed print: one `wearer_confirm` notification per batch of proposals ("Please confirm this voice") |
 
 **The panel's own card** (`panel_card`, card member `PANEL_MEMBER`, `private: false`, `touch: true`). Nobody has been identified, so
-it shows in words only `TOUCH_SAFE_TYPES` - kinds whose text is fixed and about the household's kit (`wearer_confirm` as its title
-only, `ops_alerting_broken`, `omi_health`, `omi_sync`, `panel_speaker`, `transcript_check`), of any member, never whose. Every other
-unread non-sensitive kind (a fired reminder's words, a note Zoe wrote, any new type until it is added to the set) is ONE row,
-"Some are private", with no count; its tap opens the mic. Sensitive rows are absent, as they are from the kiosk dot. Its taps are
-honoured only for the panel itself (`_require_card` applies the panel rule; `panel_review_cards.authorize` refuses a panel token
-everywhere else). A new type is locked until someone adds it to `TOUCH_SAFE_TYPES`: fail closed.
+each kind is judged by one question - is it addressed to one member, or is it a notice about the household's kit?
+
+| kind | decided | on the panel's card |
+|---|---|---|
+| `omi_health`, `omi_sync`, `panel_speaker` (`PANEL_DEVICE_TYPES`) | a device notice: fixed text about a pendant's battery / storage, a finished sync, the panel's speaker ID; nothing of a member's in it | words, and anyone at the panel may **Clear** it (and Clear all takes them) |
+| `ops_alerting_broken` (`PANEL_WORDS_ONLY`) | fixed text about Zoe's alert bot, but it is the admins' second channel for an alert that could not reach them | words, **no Clear** from the panel |
+| `wearer_confirm`, `transcript_check` (`PANEL_TITLE_ONLY`) | an ask addressed to ONE member (their voice, their transcripts) | the **title alone** - never the stored message, never what the pendant heard - no Clear (dismissing it is that member's **Not now** / own answer); a tap asks for a voice |
+| every other kind (a fired reminder's words, a note Zoe wrote, `distress_handoff`, any new type) | a member's own | ONE row, "Some are private", no count; a tap opens the mic |
+
+Never whose; sensitive rows are absent, as they are from the kiosk dot. Only a device notice is in the card's token at all, so a
+forged tap on any other row is 404. Its taps are honoured only for the panel itself (`_require_card` applies the panel rule;
+`panel_review_cards.authorize` refuses a panel token everywhere else). A new type is locked until it is placed in one of the
+three sets: fail closed.
+
+**The flag.** `ZOE_NOTIFICATIONS_PANEL_TOUCH` = `on` (default) | `off`, read per call. Off = the press is exactly the old one:
+`/api/panel/notifications/open` answers 404 for every caller (a member's own session included), the inbox poll carries no
+`notify_touch`, and the page - which learns the flag only from that poll it already makes - never asks `/open`, so the mic opens
+with no round trip first.
 
 **Clear stays cleared.** Clear = `delivered = 1`; every read filters on it. What used to bring rows back, and the rule now:
 
@@ -56,10 +68,12 @@ everywhere else). A new type is locked until someone adds it to `TOUCH_SAFE_TYPE
   `reminder_service` for every reminder made, snoozed or ticked off) are not notifications: `unread`, `unread_count`, the kiosk
   boolean, the card and the spoken tail all leave them out. They piled up without end (the live tail logged its 50-row read cap),
   so a cleared card of eight was followed by the next eight and the dot never went out.
-- **Clear all** (`act` `clear_all`, `notifications_store.clear_all`) clears every row the card's audience may clear, the rows
-  past the eight included: a member's card all of their own (old receipts too), the panel's card the household's touch-safe rows.
-  A "confirm this voice" ask is never swept up; it has its own **Not now**.
-- `COLLAPSE_TYPES` (`omi_sync`): many rows that say one thing are ONE row ("and 4 earlier") and its Clear clears them all.
+- **Clear all** (`act` `clear_all`, `notifications_store.clear_all`) is ONE update over every row the card's audience may clear -
+  no read window, so the rows past the eight and past any query cap go too: a member's card all of their own (old receipts too,
+  never a "confirm this voice" ask, which has its own **Not now**), the panel's card the household's device notices only.
+- `COLLAPSE_TYPES` (`omi_sync`) are folded BY KIND in SQL (`_folded`): the newest row stands for every unread row of that kind
+  of that member ("and 129 earlier", counted over the table), and its Clear is one update over the kind (`clear_kind`), not over
+  the rows a card happened to read. (The live backlog was ~1,600 unread sync notices: one Clear now takes them all.)
 - The wearer ask: a cleared or answered ask is not asked again when the batch only SHRANK (a proposal expired or was decided -
   a new batch hash, nothing new to ask). A proposal never asked about is a new ask.
 - The page re-reads the dot the moment a row is cleared (`zoe:card-acted`), not at the next minute's poll.
@@ -67,8 +81,8 @@ everywhere else). A new type is locked until someone adds it to `TOUCH_SAFE_TYPE
 
 **A tap on a row's words** (`open` / `detail` on the item, `zoe:card-open` in the page): `data.open` when the creator named an
 estate screen (`SCREENS`), else by kind (`OPEN_BY_TYPE`): `reminder` -> Reminders, `transcript_check` -> the checks screen,
-`omi_health` / `omi_sync` / `panel_speaker` -> Settings. A kind with no screen (`ops_alerting_broken`, `distress_handoff`, a
-plain note) opens the row out to its full words. On the panel's own card a member-private screen is never the target: the tap
+`omi_health` / `omi_sync` / `panel_speaker` -> Settings. EVERY row does one of the two: a kind with no screen
+(`ops_alerting_broken`, `distress_handoff`, a plain note however short) carries `detail` and opens out to its full words. On the panel's own card a member-private screen is never the target: the tap
 opens the mic instead. No creator writes calendar, list, message or timer notifications today; when one does it names its
 screen in `data.open`.
 
