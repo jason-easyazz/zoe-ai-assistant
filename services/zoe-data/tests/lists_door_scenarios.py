@@ -6,7 +6,8 @@ Used twice: ``python3 tests/lists_door_scenarios.py <out.json>`` with the CWD a 
 ``tests/fixtures/lists_door_flag_off_statements.json``), and ``test_lists_kernel_door.py`` runs the same calls with the flag off
 and compares. It imports ``list_service`` only (when a call is made, so the CWD's own copy is the one recorded) and runs unchanged on the older tree.
 
-Invented ids and words only. Ids made at random are masked.
+Invented ids and words only. Each id made at random is replaced by ``<id-n>``, ``n`` counted in order of first appearance across
+one call's record (statements, values, reads, then rows), so two new rows stay told apart and a row naming a new row keeps naming it.
 """
 from __future__ import annotations
 
@@ -22,13 +23,15 @@ _UPDATE = re.compile(r"UPDATE (lists|list_items) SET (.*?) WHERE (.*)$")
 _TERM = re.compile(r"(\w+)\s*(=|<>)\s*(.+)$")
 
 
-def _mask(value):
+def _mask(value, ids: dict):
+    """``value`` with each UUID replaced by ``<id-n>``: the same id always the same ``n``, a new id the next ``n`` (``ids`` holds
+    the numbering so far, in order of first appearance)."""
     if isinstance(value, str):
-        return _UUID.sub("<id>", value)
+        return _UUID.sub(lambda m: ids.setdefault(m[0], f"<id-{len(ids) + 1}>"), value)
     if isinstance(value, dict):
-        return {_mask(k): _mask(v) for k, v in value.items()}
+        return {_mask(k, ids): _mask(v, ids) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_mask(v) for v in value]
+        return [_mask(v, ids) for v in value]
     return value
 
 
@@ -120,9 +123,11 @@ class DB:
 
     def record(self) -> dict:
         """What one call did, as the fixture keeps it."""
-        rows = {t: sorted(_mask(list(r.values())), key=lambda x: json.dumps(x, sort_keys=True)) for t, r in self.rows.items()}
-        return {**_mask({"sql": self.sql, "params": self.params, "fetched": self.fetched, "fetch_args": self.fetch_args,
-                         "unapplied": self.unapplied}), "rows": rows}
+        ids: dict = {}
+        head = _mask({"sql": self.sql, "params": self.params, "fetched": self.fetched, "fetch_args": self.fetch_args,
+                      "unapplied": self.unapplied}, ids)
+        rows = {t: sorted(_mask(list(r.values()), ids), key=lambda x: json.dumps(x, sort_keys=True)) for t, r in self.rows.items()}
+        return {**head, "rows": rows}
 
 
 class TxDB(DB):
