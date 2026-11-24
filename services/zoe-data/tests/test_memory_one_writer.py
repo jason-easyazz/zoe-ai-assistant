@@ -1,7 +1,7 @@
 """Only ``memory_service.py`` writes the memory rows (the palace collection), bar FOUR named bypass writes.
 
 The rows are a collection, not SQL, so the scan is over calls, over the WHOLE service at once (``scan``): a write call
-(``upsert``, ``update``, ``delete``, ``add``, ``modify``, also ``getattr(col, "delete")(...)``) on anything that came from the
+(``upsert``, ``update``, ``delete``, ``add``, ``modify``, also ``getattr(col, "delete")``; FETCHED is enough: ``erase = col.delete``) on anything that came from the
 collection (``leased_drawers(...)``, ``._collection()``, ``get_drawers_collection(...)``, ``get_collection`` /
 ``get_or_create_collection`` / ``create_collection``, or any function that RETURNS one; through any chain of assignments, an
 attribute it was stored in, a closure, a module-level or ``global`` handle, a parameter such a value is passed to in ANY module,
@@ -83,8 +83,10 @@ def scan(modules: dict) -> Counter:
     a name bound to it in the unit or an enclosing one (assignment, tuple unpacking, walrus, ``with ... as``, ``for``, a
     ``global``); a parameter a caller ANYWHERE in the set passes it to (callees found by bare name, so a helper in another
     module is followed through its import, a method on an object by its name anywhere); a parameter called the collection; an ATTRIBUTE some unit stored it in (``self.col = ...``, keyed by
-    attribute name over the whole set); either branch of ``a if c else b`` / ``a or b``. A write is a WRITES method named on it
-    (called, or handed on as a callable) or ``getattr(<it>, "<write>")``."""
+    attribute name over the whole set); either branch of ``a if c else b`` / ``a or b``. A write is a WRITES method FETCHED off it
+    (called there, stored, or handed on as a callable: the fetch is the site) or ``getattr(<it>, name)`` with a WRITES name or
+    any name that is not a constant; the one ``getattr`` that is not a site is the argument of ``callable(...)`` (a probe that
+    yields a bool, the method never leaves it)."""
     units, parent, globals_of = {}, {}, {}
     local, top, methods = {}, {}, {}        # (module, bare) -> units; (module, bare) -> top-level units; bare -> methods
     imported, modnames = {}, {}             # (module, local name) -> (module, bare); (module, local name) -> module
@@ -208,17 +210,20 @@ def scan(modules: dict) -> Counter:
                                 changed = True
                 if changed:
                     names = names_of(u)
+    probes = {id(n.args[0]) for nodes in own.values() for n in nodes                # ``callable(getattr(col, "update", None))``
+              if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "callable" and len(n.args) == 1}
     found: Counter = Counter()
     for u, nodes in own.items():
         names = names_of(u)
         for node in nodes:
-            # the write method named on a collection: called here, or handed on as a callable (``_store(col.update, ...)``)
+            # the write method named on a collection: called here, or FETCHED (``erase = col.delete``, ``self.erase = col.delete``,
+            # ``run(col.update, ...)``): the fetch is the write site, wherever the bound method is called later
             if isinstance(node, ast.Attribute) and node.attr in WRITES and is_col(node.value, names):
                 found[u] += 1
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Call) and getattr(node.func.func, "id", "") == "getattr" \
-                    and len(node.func.args) >= 2 and isinstance(node.func.args[1], ast.Constant) \
-                    and node.func.args[1].value in WRITES and is_col(node.func.args[0], names):
-                found[u] += 1                               # ``getattr(col, "delete")(...)``; a bare ``getattr`` probe is a read
+            elif isinstance(node, ast.Call) and getattr(node.func, "id", "") == "getattr" and len(node.args) >= 2 \
+                    and is_col(node.args[0], names) and id(node) not in probes \
+                    and (not isinstance(node.args[1], ast.Constant) or node.args[1].value in WRITES):
+                found[u] += 1       # ``getattr(col, "delete")`` called at once or later, or ``getattr(col, name)``: any name may write
     return found
 
 
@@ -351,6 +356,45 @@ def elsewhere(keeper):
         ("a.py", "created"): 1})
 
 
+def test_a_write_method_fetched_first_and_called_later_is_a_write():
+    """Round 4: the bound write method fetched off the collection and called later, in every form: by attribute into a name,
+    into an attribute, handed to a helper; by ``getattr`` with a constant name into a name, with a NON-constant name (kept, and
+    called at once), and the old immediate ``getattr(col, "delete")(...)``. Each is one write, at the FETCH. A
+    ``callable(getattr(col, "update", None))`` probe and ``getattr(col, "get")`` are reads. Controls run (each fails this
+    test): the ``getattr`` branch put back to the old rule (only a ``getattr`` whose result is called at once: ``by_getattr_later``
+    and ``by_name_kept`` missed); the non-constant case dropped (``by_name_kept`` and ``by_name_called`` missed); the probe
+    exemption dropped (``probe`` counted)."""
+    src = '''
+def by_attr_later(svc, ids):
+    erase = svc._collection().delete
+    erase(ids=ids)
+class Holder:
+    def __init__(self, svc):
+        self.erase = svc._collection().delete
+    def go(self, ids):
+        self.erase(ids=ids)
+def handed(svc, ids):
+    run_later(leased_drawers(svc).update, ids)
+def by_getattr_later(svc, ids):
+    erase = getattr(svc._collection(), "delete")
+    erase(ids=ids)
+def by_name_kept(svc, ids, verb):
+    fn = getattr(leased_drawers(svc), verb)
+    fn(ids=ids)
+def by_name_called(svc, ids, verb):
+    getattr(svc._collection(), verb)(ids=ids)
+def by_getattr_now(svc, ids):
+    getattr(svc._collection(), "delete")(ids=ids)
+def probe(svc):
+    col = svc._collection()
+    return callable(getattr(col, "update", None))
+def reads(svc):
+    return getattr(svc._collection(), "get")(ids=[1])
+'''
+    assert collection_writes(src) == Counter({"by_attr_later": 1, "Holder.__init__": 1, "handed": 1, "by_getattr_later": 1,
+                                              "by_name_kept": 1, "by_name_called": 1, "by_getattr_now": 1})
+
+
 def test_a_later_function_of_the_same_name_does_not_hide_an_earlier_write():
     """Two methods called ``save`` in two classes, and a nested ``save``: each is its own entry, so the earlier one's write
     is still counted. Control run: with ``collection_writes`` keying functions by bare name (the old ``{f.name: f}``), the
@@ -378,6 +422,119 @@ def test_the_memory_service_itself_is_seen_writing():
     assert found["MemoryService._write_row"] == 1 and found["MemoryService._update_row"] >= 1 and sum(found.values()) >= 15
 
 
+# ---- which service methods change the rows: DERIVED from the service's code -------------------------------------------------------
+SERVICE_CLASS = "MemoryService"
+#: the access tick a read schedules for the rows it returned (``access_count``, ``last_accessed``): see ``changing_methods``
+READ_TICK = "_schedule_tick"
+
+
+def changing_methods(source: str, *, through_tick: bool = True) -> set:
+    """The names of the ``MemoryService`` methods that CHANGE the memory rows, read from the service module's source.
+
+    The rule: a method changes the rows when its own body (nested functions included), or any function of the module it NAMES,
+    transitively, makes a write the collection scan (``scan``) finds: a write method on the rows collection or on the audit
+    collection. A method is named as ``self.X`` / ``cls.X`` / ``MemoryService.X`` and a module-level function by its bare name;
+    named means called OR handed on (``self._run_sync(self._tick_access_sync, ...)``,
+    ``self._track_background_task(self._tick_access(...))``), so a write run through an executor or a background task counts.
+
+    ``through_tick=False`` cuts the one edge into ``READ_TICK``: the methods that then stop changing anything are the reads whose
+    ONLY write is the access tick of the rows they returned (``test_the_reads_that_tick_change_nothing_else`` names them)."""
+    tree = ast.parse(source)
+    module_fns = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == SERVICE_CLASS)
+    methods = {n.name: n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    units = {("m", k): v for k, v in methods.items()} | {("f", k): v for k, v in module_fns.items()}
+
+    def owner(qual: str):
+        parts = qual.split(".")
+        if parts[0] == SERVICE_CLASS:
+            return ("m", parts[1]) if len(parts) > 1 else None
+        return ("f", parts[0]) if parts[0] in module_fns else None
+
+    writes = {owner(q) for (_r, q), n in scan({"memory_service.py": source}).items() if n} - {None}
+    edges = {}
+    for key, fn in units.items():
+        out = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                    and node.value.id in ("self", "cls", SERVICE_CLASS) and node.attr in methods:
+                out.add(("m", node.attr))
+            elif isinstance(node, ast.Name) and node.id in module_fns:
+                out.add(("f", node.id))
+        if not through_tick:
+            out.discard(("m", READ_TICK))
+        edges[key] = out - {key}
+    changing = set(writes)
+    grew = True
+    while grew:
+        grew = False
+        for key, out in edges.items():
+            if key not in changing and out & changing:
+                changing.add(key)
+                grew = True
+    return {name for kind, name in changing if kind == "m"}
+
+
+def test_the_mutating_methods_are_derived_from_the_service():
+    """``memory_writers`` lists every method the rule (``changing_methods``) finds, no more: the 13 that take who is acting
+    (``MUTATING``) and the rest (``WITHOUT_ACTING``: counters on rows, a superseded row put back, compaction, the residue scrub); every
+    private method that changes the rows is named by nobody outside the service (else it is a way round the table); the reads
+    whose only write is their access tick are exactly ``READS_THAT_TICK``. Controls run (each fails this): ``tick_access``
+    removed from ``WITHOUT_ACTING`` (the derivation still finds it); a new public method planted in the real service,
+    ``womble_fix``, writing only through ``self._run_sync(self._tick_access_sync, ...)``."""
+    import memory_writers
+
+    found = changing_methods((SVC / "memory_service.py").read_text("utf-8"))
+    no_tick = changing_methods((SVC / "memory_service.py").read_text("utf-8"), through_tick=False)
+    public = {name for name in found if not name.startswith("_")}
+    assert set(memory_writers.MUTATING).isdisjoint(memory_writers.WITHOUT_ACTING)
+    assert public - set(memory_writers.READS_THAT_TICK) == set(memory_writers.MUTATING) | set(memory_writers.WITHOUT_ACTING)
+    assert set(memory_writers.READS_THAT_TICK) == public - no_tick
+    private = {name for name in found if name.startswith("_")}
+    outside = Counter()
+    for rel, path in _modules():
+        if rel != "memory_service.py":
+            outside.update((rel, n.attr) for n in ast.walk(ast.parse(path.read_text("utf-8")))
+                           if isinstance(n, ast.Attribute) and n.attr in private)
+    assert dict(outside) == {}
+
+
+def test_the_derivation_finds_a_new_mutating_method():
+    """A method planted in the service that writes through a private helper run in an executor (``self._run_sync(self._x)``),
+    one that writes through a module function, one that writes the audit collection, and a read that only ticks: the first
+    three are found, the read only with the tick edge, the plain read never. Controls run (each fails this): the edge to a
+    module-level function dropped (``planted_module`` missed); ``through_tick`` ignored (``a_read`` still found without the
+    tick)."""
+    src = '''
+def _module_writer(col):
+    col.delete(ids=[1])
+class MemoryService:
+    def _collection(self):
+        return get_drawers_collection("x")
+    def _audit_collection(self):
+        return None
+    def _x_sync(self, ids):
+        self._collection().update(ids=ids, metadatas=[{}])
+    async def planted_executor(self, ids):
+        await self._run_sync(self._x_sync, ids)
+    def planted_module(self):
+        _module_writer(self._collection())
+    def planted_audit(self):
+        self._audit_collection().add(ids=[1])
+    def _schedule_tick(self, ids):
+        self._track_background_task(self.planted_executor(ids))
+    async def a_read(self, ids):
+        rows = self._collection().get(ids=ids)
+        self._schedule_tick(ids)
+        return rows
+    async def plain_read(self, ids):
+        return self._collection().get(ids=ids)
+'''
+    assert changing_methods(src) == {"_x_sync", "planted_executor", "planted_module", "planted_audit", "_schedule_tick", "a_read"}
+    assert changing_methods(src, through_tick=False) == {"_x_sync", "planted_executor", "planted_module", "planted_audit",
+                                                         "_schedule_tick"}
+
+
 # ---- every call of a mutating method, and who is acting there -------------------------------------------------------------------
 def mutating_calls(source: str, rel: str) -> Counter:
     """``{(module, function, method): calls}`` of the mutating method names in one module (nested functions by dotted name).
@@ -388,16 +545,17 @@ def mutating_calls(source: str, rel: str) -> Counter:
     import memory_writers
 
     found: Counter = Counter()
+    changing = set(memory_writers.MUTATING) | set(memory_writers.WITHOUT_ACTING)
 
     def walk(node, fn):
         for child in ast.iter_child_nodes(node):
             inner = fn
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 inner = child.name if not fn else f"{fn}.{child.name}"
-            if isinstance(child, ast.Attribute) and child.attr in memory_writers.MUTATING:
+            if isinstance(child, ast.Attribute) and child.attr in changing:
                 found[(rel, fn, child.attr)] += 1
             elif isinstance(child, ast.Call) and getattr(child.func, "id", "") == "getattr" and len(child.args) >= 2 \
-                    and isinstance(child.args[1], ast.Constant) and child.args[1].value in memory_writers.MUTATING:
+                    and isinstance(child.args[1], ast.Constant) and child.args[1].value in changing:
                 found[(rel, fn, child.args[1].value)] += 1
             walk(child, inner)
 
@@ -452,13 +610,21 @@ def a_read(svc):
 
 def test_every_call_of_a_mutating_method_is_in_the_table_with_who_is_acting():
     """``tests/memory_writers.py`` is the whole list: a new call site, or one more call in a listed function, fails until it is
-    added WITH who is acting there. Control run: a second ``svc.ingest`` planted in ``routers/notes._store_note_memory`` fails."""
+    added WITH who is acting there. The methods are the DERIVED set (``test_the_mutating_methods_are_derived_from_the_service``):
+    the calls of those that take ``acting`` are ``SITES``, of the rest ``WITHOUT_ACTING_SITES``. Control runs: a second
+    ``svc.ingest`` planted in ``routers/notes._store_note_memory`` fails; round 4, a second ``svc.tick_access`` planted in
+    ``memory_digest._rem_reinforce_pass._write`` fails (``tick_access`` was in no list before)."""
     import memory_writers
 
     found: Counter = Counter()
     for rel, path in _modules():
         found.update(mutating_calls(path.read_text("utf-8"), rel))
-    assert service_calls(found, memory_writers.NOT_THE_SERVICE) == {k: n for k, (_who, n) in memory_writers.SITES.items()}
+    calls = service_calls(found, memory_writers.NOT_THE_SERVICE)
+    assert {k: n for k, n in calls.items() if k[2] in memory_writers.MUTATING} == {
+        k: n for k, (_who, n) in memory_writers.SITES.items()}
+    assert {k: n for k, n in calls.items() if k[2] in memory_writers.WITHOUT_ACTING} == {
+        k: n for k, (_who, n) in memory_writers.WITHOUT_ACTING_SITES.items()}
+    assert {who for who, _n in memory_writers.WITHOUT_ACTING_SITES.values()} <= {"member", "automatic"}
     assert {who for who, _n in memory_writers.SITES.values()} == {"member", "automatic", "passes_on"}
     assert len(memory_writers.MUTATING) == 13
 
