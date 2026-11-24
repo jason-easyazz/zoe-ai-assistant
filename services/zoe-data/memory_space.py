@@ -21,6 +21,7 @@ Pure of HTTP: the router (``routers/memories.py``) turns :class:`SpaceRefused` i
 """
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import logging
 import re
@@ -250,6 +251,7 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     be hidden): calling again redoes EVERY remaining step - a row that is already rejected is finished the same way, twins and
     erase included - so the caller must not report a forget that did not hold.
     """
+    acting = memory_actor.member(user_id)
     svc = svc or pa._svc_default()
     rid = str(row_id or "").strip()
     if not rid:
@@ -268,12 +270,12 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     twins = await pa.twins_of(user_id, ref, svc=svc, strict=True)    # a failed lookup stops us BEFORE the forget: retryable
     plan = await pa._plan_forget(user_id, [ref.id, *(tw.id for tw in twins)], exp, ref.text or "")   # PARK FIRST (os_shadow.plan_erase)
     if status == "approved":
-        if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
+        if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space", acting=acting) is None:
             await plan.drop()
             raise RuntimeError("memory store refused the forget")
     gone = [ref.id]
     for tw in twins:
-        if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
+        if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_memory_space", acting=acting) is None:
             raise RuntimeError("memory store refused a twin's forget")
         gone.append(tw.id)
     physical = False
@@ -282,7 +284,7 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
 
         if physical_erase_enabled():
             # a failed physical erase is NOT "forgotten": the text is still on disk. The rows stay rejected; a retry finishes it.
-            erased = await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)")
+            erased = await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)", acting=acting)
             plan.note_erase(result=erased)
             physical = True
     erased = await pa._erase_words(user_id, exp, ref.text or "")
@@ -316,6 +318,7 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
     (``origin="admin"``, operator class), never the member's own. ``'forgotten'`` | ``'gone'`` (absent, not ``owner``'s, or
     not approved). RAISES when a step could not finish; calling again finishes it. Minor-affect safety cell (c),
     docs/governance/emotional-safety-note.md section 4.1: a feeling must not survive the guardian's forget in a twin."""
+    acting = memory_actor.member(actor)
     svc = svc or pa._svc_default()
     rid = str(row_id or "").strip()
     ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S) if rid else None
@@ -332,14 +335,14 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
         if str((row.metadata or {}).get("status") or "").lower() == "rejected":
             gone.append(row.id)                  # this row's reject already landed (an earlier, unfinished attempt): go on to the rest
             continue
-        if await svc.review(row.id, decision="reject", actor=actor, origin="admin", note="guardian_forget") is None:
+        if await svc.review(row.id, decision="reject", actor=actor, origin="admin", note="guardian_forget", acting=acting) is None:
             raise RuntimeError("memory store refused the guardian's forget")
         gone.append(row.id)
     if hasattr(svc, "erase_rows"):
         from memory_service import physical_erase_enabled
 
         if physical_erase_enabled():
-            erased = await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
+            erased = await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian", acting=acting)
             plan.note_erase(result=erased)
     await pa._erase_words(owner, _explained_for(rid, ref), ref.text or "")
     await plan.ok()
@@ -359,6 +362,7 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
     store refused the edit - e.g. it names a forgotten entity). Raises when the store cannot be read, or when a twin could not be
     retired (the same call again finishes it: a superseded row whose successor already holds ``new_text`` retires the rest).
     """
+    acting = memory_actor.member(user_id)
     import correction_apply
 
     svc = svc or pa._svc_default()
@@ -377,7 +381,7 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
         if (succ is not None and pa._owns(succ.metadata or {}, user_id)
                 and " ".join((succ.text or "").split()) == new and correction_apply.enabled()):
             twins = [tw for tw in await pa.twins_of(user_id, ref, svc=svc, strict=True) if tw.id != succ_id]
-            await retire_twins(user_id, twins, svc)
+            await retire_twins(user_id, twins, svc, acting=acting)
             logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d (retry finished)", user_id, len(twins))
             return "corrected"
         return "gone"
@@ -394,19 +398,19 @@ async def correct_row(user_id: str, row_id: str, new_text: str, *, utterance: st
                                                       svc=svc)
     if res is None:
         return "refused"
-    await retire_twins(user_id, twins, svc)
+    await retire_twins(user_id, twins, svc, acting=acting)
     logger.info("MEMORY_SPACE_CORRECT user=%s twins=%d", user_id, len(twins))
     return "corrected"
 
 
-async def retire_twins(user_id: str, twins: list, svc: Any) -> None:
+async def retire_twins(user_id: str, twins: list, svc: Any, *, acting: "memory_actor.Acting") -> None:
     """Reject every twin that still holds the old value. RAISES when one could not be retired (the store refused or failed): a
     correction is not acknowledged while a sibling still recalls the old value; calling :func:`correct_row` again with the same
     words finishes the remaining twins (its superseded-retry path)."""
     failed = 0
     for tw in twins:
         try:
-            if await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction") is None:
+            if await svc.review(tw.id, decision="reject", actor=user_id, note="superseded by a correction", acting=acting) is None:
                 failed += 1
         except Exception as exc:  # noqa: BLE001 - counted; the caller hears "not finished"
             logger.warning("memory_space: twin retire failed (%s)", type(exc).__name__)

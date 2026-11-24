@@ -12,6 +12,7 @@ Usage:
 Scheduled by routers/system.py at 3am daily.
 Manual trigger: POST /api/memories/digest?user_id=jason
 """
+import memory_actor
 import asyncio
 import functools
 import json
@@ -293,7 +294,7 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
                 continue
             # Relink through the memory service so the metadata-only rewrite runs
             # under the SAME per-user lock as tick_access (no lost-update race).
-            if await svc.relink_entity(user_id, mem_id, "person", str(person_uuid)):
+            if await svc.relink_entity(user_id, mem_id, "person", str(person_uuid), acting=memory_actor.AUTOMATIC):
                 result["relinked"] += 1
                 logger.info(
                     "link_resolver: relinked %s -> person %s user=%s",
@@ -1361,6 +1362,7 @@ async def run_turn_digest(
                         prompt_text=prompt_text or None,
                         speaker_verified=speaker_verified,
                         **claim_kw,
+                        acting=memory_actor.AUTOMATIC,
                     )
                     if new_ref is not None:
                         result["new"] += 1
@@ -1391,6 +1393,7 @@ async def run_turn_digest(
                     prompt_text=prompt_text or None,
                     speaker_verified=speaker_verified,
                     **claim_kw,
+                    acting=memory_actor.AUTOMATIC,
                 )
                 if ref is not None:
                     stored_claims.append((ref, item_claims[idx], fact))
@@ -1571,7 +1574,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                                     verdict.text, user_id=user_id, source="digest",
                                     memory_type=item.get("type", "fact"), confidence=0.5, status="approved",
                                     tags=["digest", item.get("type", "unknown"), "unsupported_observation"],
-                                    anchor_text=anchor_for_write, hold="unsupported_observation")
+                                    anchor_text=anchor_for_write, hold="unsupported_observation", acting=memory_actor.AUTOMATIC)
                                 log_row("digest", user_id, held, "held")
                                 if held is not None and memory_authority.is_candidate(held):
                                     result["candidates"] = result.get("candidates", 0) + 1
@@ -1620,6 +1623,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         anchor_text=anchor_for_write,
                         source_excerpt=excerpt,
                         turn_ref=turn_id,
+                        acting=memory_actor.AUTOMATIC,
                     )
                 except MemoryServiceError as exc:
                     logger.warning(
@@ -1672,6 +1676,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         anchor_text=anchor_for_write,
                         source_excerpt=excerpt,
                         turn_ref=turn_id,
+                        acting=memory_actor.AUTOMATIC,
                     )
                     if new_ref is not None:
                         result["superseded"] += 1
@@ -1692,6 +1697,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     anchor_text=anchor_for_write,
                     source_excerpt=excerpt,
                     user_turn_id=turn_id,
+                    acting=memory_actor.AUTOMATIC,
                 )
             except MemoryServiceError as exc:
                 logger.warning("memory_digest: ingest failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
@@ -1847,6 +1853,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
                 confidence=0.9,
                 status="approved",
                 tags=["emotional", emotion],
+                acting=memory_actor.AUTOMATIC,
             )
             if ref is not None:
                 stored += 1
@@ -2490,6 +2497,7 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
                     if await svc.archive_duplicate(
                         ref.id, keeper.id, actor="consolidation",
                         note="weekly: identical duplicate of " + keeper.id,
+                        acting=memory_actor.AUTOMATIC,
                     ):
                         merged += 1
                 except Exception as exc:
@@ -2550,6 +2558,7 @@ async def _resolve_contradictions(svc, user_id: str, max_pairs: int = 50) -> int
                     edits=newer.text,
                     actor="consolidation",
                     note="weekly: contradicted by newer fact",
+                    acting=memory_actor.AUTOMATIC,
                 ) is not None:       # None = refused by the opt-out wall
                     resolved += 1
             except Exception as exc:
@@ -2609,7 +2618,7 @@ async def run_weekly_consolidation(user_id: str) -> dict:
     except Exception as exc:
         logger.warning("consolidation: dispute expiry failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     try:
-        archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="decay_sweep")
+        archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="decay_sweep", acting=memory_actor.AUTOMATIC)
         summary["archived"] = len(archived_ids)
     except Exception as exc:
         logger.warning("consolidation: sweep failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
@@ -3179,6 +3188,7 @@ async def _synthesis_pass(user_id: str) -> dict:
                     status="approved",
                     tags=[tag, "synthesis"],
                     created_ids=created_ids,
+                    acting=memory_actor.AUTOMATIC,
                 )
                 if ref:
                     # The SOURCE post-check, beside ingest's own member-mark post-check (erase_watermark.guarded_write): ingest
@@ -3196,7 +3206,7 @@ async def _synthesis_pass(user_id: str) -> dict:
                                 # Outside the memory lock: erase_rows takes the erase gate before its memory lock.
                                 await svc.erase_rows(user_id, created_ids, actor="synthesis_undo",
                                                      reason="synthesis source no longer live",
-                                                     reach_shadow=False)   # rows synthesis just wrote, never shadowed
+                                                     reach_shadow=False, acting=memory_actor.AUTOMATIC)   # rows synthesis just wrote, never shadowed
                                 logger.info("SYNTHESIS_SOURCE_COMPENSATED n=%d", len(created_ids))
                             continue
                     # Link synthesized memory back to source cluster
@@ -3897,6 +3907,7 @@ async def run_music_taste_digest(user_id: str) -> dict:
                 confidence=0.85,
                 status="approved",
                 tags=["music", "taste", "auto"],
+                acting=memory_actor.AUTOMATIC,
             )
             if ref is not None:
                 result["facts_ingested"] += 1

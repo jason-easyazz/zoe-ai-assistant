@@ -19,6 +19,7 @@ Two behaviour groups, split by risk:
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 import os
 import re
@@ -795,7 +796,7 @@ async def refresh_person_mirror(user_id: str, person_id: str, name: str,
         svc = get_memory_service()
         for r in await svc.list_by_entity(user_id, [str(person_id)]):
             if _MIRROR_RE.match(str(getattr(r, "text", "") or "")):
-                await svc.review(r.id, decision="archive", actor=user_id, note="contact renamed")
+                await svc.review(r.id, decision="archive", actor=user_id, note="contact renamed", acting=memory_actor.AUTOMATIC)
         from routers.people import _store_person_memory  # type: ignore
 
         await _store_person_memory(

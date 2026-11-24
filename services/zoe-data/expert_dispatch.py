@@ -25,6 +25,7 @@ expert brain. Only `active` + an allow-listed domain actually fulfills.
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
@@ -579,7 +580,8 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                                memory_type: str, confidence: float,
                                tags: list[str], anchor_text: Optional[str] = None,
                                source_excerpt: Optional[str] = None,
-                               speaker_verified: Optional[bool] = None) -> str:
+                               speaker_verified: Optional[bool] = None,
+                               acting: "memory_actor.Acting") -> str:
     """Ingest a conversational fact, merging it with an equivalent existing row.
 
     ``anchor_text`` is the user's OWN turn text the fact was mined from (user turns only):
@@ -647,6 +649,7 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         memory_type=memory_type, confidence=confidence, status="approved",
         tags=tags, metadata=metadata, anchor_text=anchor_text, source_excerpt=source_excerpt,
         **({} if speaker_verified is None else {"speaker_verified": speaker_verified}),
+        acting=acting,
     )
     new_id = getattr(ref, "id", None)
     if ref is None:
@@ -691,10 +694,10 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                 # not a separate archive attributed to a bare model label (which the wall
                 # refuses, leaving both rows approved).
                 retired = await svc.supersede_by(user_id, old_id, new_id, actor=source,
-                                                 note="superseded by newer conversational fact") is not False
+                                                 note="superseded by newer conversational fact", acting=acting) is not False
             else:
                 retired = await svc.review(old_id, decision="archive", actor=source,
-                                           note="superseded by newer conversational fact") is not None
+                                           note="superseded by newer conversational fact", acting=acting) is not None
             if not retired:
                 # the wall refused (the new row has no standing over the old one) or the old row already moved:
                 # BOTH rows stay approved and the log must not claim a supersede that did not happen
@@ -719,6 +722,7 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     Statements are persisted to MemPalace via MemoryService.ingest (which has
     built-in idempotency via user_turn_id, so a double-submit can't double-store)
     so they become recallable. Questions fall back to the recall expert."""
+    acting = memory_actor.member(user_id)
     text = (text or "").strip()
     if not text:
         return None
@@ -918,7 +922,7 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         # Neil" vs an earlier value), UPDATE/supersede it instead of stacking a
         # duplicate/contradiction. Falls through to a plain ingest on any error.
         outcome = await _ingest_or_supersede(
-            svc, text, user_id=user_id, source="voice_fact",
+            svc, text, acting=acting, user_id=user_id, source="voice_fact",
             session_id=session_id or None, user_turn_id=user_turn_id,
             memory_type="fact", confidence=0.85, tags=["voice", "self"],
             source_excerpt=utterance,

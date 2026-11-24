@@ -17,6 +17,7 @@ background loop). Reuses the existing Gemma extractor + write-quality gate.
 """
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import hashlib
 import json
@@ -523,7 +524,7 @@ async def consolidate_session(session_id: str, user_id: str,
         turn_id = "idle:" + hashlib.sha1(f"{session_id}:{text}".encode("utf-8")).hexdigest()[:16]
         try:
             outcome = await _ingest_or_supersede(
-                svc, text, user_id=user_id, source="idle_consolidation",
+                svc, text, acting=memory_actor.AUTOMATIC, user_id=user_id, source="idle_consolidation",
                 session_id=session_id, user_turn_id=turn_id,
                 memory_type="fact", confidence=0.8, tags=["idle", "self"],
                 anchor_text=fact_anchor(item, user_turns) or "",

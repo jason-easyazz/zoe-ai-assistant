@@ -33,6 +33,7 @@ and ``search(as_of=...)`` read them.
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 import re
 from dataclasses import dataclass
@@ -595,7 +596,7 @@ async def supersede_for_turn(svc, user_id: str, cue: str, written: Iterable[Any]
                 if not cue_applies(c.name, ref.text, old.text):
                     continue
                 if await svc.supersede_by(user_id, old.id, by.id, actor=ACTOR,
-                                          note=f"implicit change ({c.name}{'; key ' + why if why else ''})"):
+                                          note=f"implicit change ({c.name}{'; key ' + why if why else ''})", acting=memory_actor.AUTOMATIC):
                     taken.add(old.id)
                     retired.append((old.text, by.text))
                     hits += 1
@@ -660,7 +661,7 @@ async def nightly_conflict_pass(svc, user_id: str, *, cap: int = NIGHTLY_CAP,
         if done >= cap or dry_run:
             break
         if await svc.supersede_by(user_id, older.id, newer.id, actor=ACTOR,
-                                  note=f"nightly implicit conflict ({reason})"):
+                                  note=f"nightly implicit conflict ({reason})", acting=memory_actor.AUTOMATIC):
             done += 1
             retired.append((older.text, newer.text))
     if retired:
@@ -730,7 +731,7 @@ async def retire_by_claims(svc, user_id: str, entries: Iterable[tuple[Any, Any]]
                 taken.add(old.id)
                 reasons.append(why.split(":")[0])
                 if mode == sc.ENFORCE:
-                    if await svc.supersede_by(user_id, old.id, by.id, actor=ACTOR, note=f"claim key ({why})"):
+                    if await svc.supersede_by(user_id, old.id, by.id, actor=ACTOR, note=f"claim key ({why})", acting=memory_actor.AUTOMATIC):
                         out["retired"] += 1
                         retired.append((old.text, by.text))
                     else:

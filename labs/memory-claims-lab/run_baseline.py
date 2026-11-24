@@ -134,7 +134,8 @@ async def _file(facts, uid):
     with mock.patch.object(memory_service, "_user_opted_out", not_opted_out):
         for fact, said in facts:
             before = {r.id for st in ("approved", "pending") for r in await s.list_by_status(user_id=uid, status=st)}
-            await s.ingest(fact, user_id=uid, source="turn_digest", source_excerpt=said, anchor_text=said)
+            await s.ingest(fact, user_id=uid, source="turn_digest", source_excerpt=said, anchor_text=said,
+                           acting=__import__("memory_actor").AUTOMATIC)
             rows = [r for st in ("approved", "pending") for r in await s.list_by_status(user_id=uid, status=st) if r.id not in before]
             out.append((rows[0].text, dict(rows[0].metadata or {})) if rows else (None, {}))
     return out

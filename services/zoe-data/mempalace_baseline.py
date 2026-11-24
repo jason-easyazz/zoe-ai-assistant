@@ -6,6 +6,7 @@ while the maintenance runner can use Zoe's real `MemoryService` on the Jetson.
 
 from __future__ import annotations
 
+import memory_actor
 import time
 from dataclasses import dataclass
 from statistics import median
@@ -139,6 +140,7 @@ async def run_mempalace_baseline(
             confidence=0.95,
             status="approved",
             tags=["mempalace_baseline", case.case_id],
+            acting=memory_actor.AUTOMATIC,
         )
         started = time.perf_counter()
         hits = await service.search(

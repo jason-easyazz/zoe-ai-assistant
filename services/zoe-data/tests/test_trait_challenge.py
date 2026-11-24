@@ -57,7 +57,7 @@ class FakeSvc:
     async def list_by_status(self, *, user_id, status, limit, strict=False):
         return [r for r in self.rows if r.metadata["status"] == status]
 
-    async def flag_challenged(self, mem_id, *, user_id, utterance):
+    async def flag_challenged(self, mem_id, *, user_id, utterance, **_kw):
         self.flagged.append((mem_id, user_id))
         return True
 

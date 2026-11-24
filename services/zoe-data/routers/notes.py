@@ -2,6 +2,7 @@
 FastAPI router for notes.
 Mounted at prefix="/api/notes" with tag "notes".
 """
+import memory_actor
 import json
 import logging
 import uuid
@@ -71,6 +72,7 @@ async def _store_note_memory(db, user_id: str, note: dict, action: str):
                 tags=["note", action],
                 entity_type="note",
                 entity_id=note.get("id"),
+                acting=memory_actor.AUTOMATIC,
             )
         except MemoryServiceError as exc:
             # MemoryService rejections (PII, empty text, missing user) are

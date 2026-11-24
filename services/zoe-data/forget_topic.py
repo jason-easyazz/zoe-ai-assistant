@@ -22,6 +22,7 @@ Pure matching (``parse`` / ``topic_groups`` / ``row_matches``) has no I/O; ``for
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 import re
 import unicodedata
@@ -283,6 +284,7 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
 
 
 async def _forget(svc: Any, user_id: str, topic: str) -> Result:
+    acting = memory_actor.member(user_id)
     res = Result()
     groups = topic_groups(topic)
     if not groups:
@@ -432,7 +434,7 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
     archived: list = []
     for r in rows:
         try:
-            ref = await svc.review(r.id, decision="archive", actor=user_id, note="forget_topic")
+            ref = await svc.review(r.id, decision="archive", actor=user_id, note="forget_topic", acting=acting)
         except Exception as exc:  # noqa: BLE001
             plan.failed()
             logger.warning("forget_topic: archive failed (%s)", type(exc).__name__)
@@ -449,7 +451,7 @@ async def _forget(svc: Any, user_id: str, topic: str) -> Result:
             from memory_service import physical_erase_enabled
 
             if physical_erase_enabled():
-                erased = await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (topic)")
+                erased = await svc.erase_rows(user_id, erase_ids, actor=user_id, reason="forgotten by request (topic)", acting=acting)
                 plan.note_erase(result=erased)
                 await turn_forget.clear_unerased(user_id)
                 res.finished_earlier = len(carried)

@@ -44,7 +44,7 @@ class _FakeSvc:
             return MemoryRef(id="new-" + mem_id, text=kw.get("edits") or "")
         return None
 
-    async def relink_entity(self, user_id, mem_id, entity_type, entity_id):
+    async def relink_entity(self, user_id, mem_id, entity_type, entity_id, **_kw):
         self.relinked.append((user_id, mem_id, entity_type, entity_id))
 
     async def ingest(self, text, **kw):
@@ -65,7 +65,7 @@ def _row(mem_id, text, pattern_type=None, status="approved"):
     return MemoryRef(id=mem_id, text=text, metadata=meta)
 
 
-async def _ingest(svc, text, pattern_type, monkeypatch, entity_id=PID):
+async def _ingest(svc, text, pattern_type, monkeypatch, entity_id=PID, **_kw):
     monkeypatch.setattr(
         person_extractor, "get_memory_service", lambda: svc, raising=False
     )

@@ -21,6 +21,7 @@ check says is not them (``speaker_verified is False``) does nothing.
 """
 from __future__ import annotations
 
+import memory_actor
 import logging
 import re
 from typing import Any, Iterable, Optional
@@ -150,6 +151,7 @@ async def apply_challenge(user_id: str, turn: str, *, svc: Any = None,
                           speaker_verified: Optional[bool] = None) -> list[str]:
     """Flag the user's approved rows asserting the trait this turn doubts. Returns the flagged ids.
     Never raises into the turn."""
+    acting = memory_actor.member(user_id)
     try:
         if speaker_verified is False:
             return []
@@ -163,7 +165,7 @@ async def apply_challenge(user_id: str, turn: str, *, svc: Any = None,
         rows = await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT)
         flagged = []
         for r in matching_rows(trait, rows):
-            if await svc.flag_challenged(r.id, user_id=user_id, utterance=turn):
+            if await svc.flag_challenged(r.id, user_id=user_id, utterance=turn, acting=acting):
                 flagged.append(r.id)
         if flagged:
             logger.info("TRAIT_CHALLENGED user=%s rows=%d", user_id, len(flagged))

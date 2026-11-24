@@ -144,7 +144,7 @@ async def world(svc, monkeypatch):
     mfa.reset_state()
     erased: "list[str]" = []
 
-    async def erase_rows(user_id, ids, *, actor="", reason=""):
+    async def erase_rows(user_id, ids, *, actor="", reason="", **_kw):
         # the physical erase over the stand-in store (the byte scrub is test_memory_physical_erase's and the bench's F5/F6); here: WHICH rows go
         gone = [i for i in ids if i in svc._col.rows
                 and (svc._col.rows[i][1].get("user_id") or svc._col.rows[i][1].get("wing")) == user_id]

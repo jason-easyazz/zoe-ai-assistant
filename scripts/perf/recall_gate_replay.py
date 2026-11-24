@@ -188,7 +188,7 @@ async def build_store(rows, user):
     assert DEMO.match(user), user
     svc = MemoryService(data_dir=os.environ["MEMPALACE_DATA_DIR"])
     for text, status, source in rows:
-        await svc.ingest(text, user_id=user, source=source, status=status)
+        await svc.ingest(text, user_id=user, source=source, status=status, acting=__import__("memory_actor").AUTOMATIC)
     got = svc._collection().get(include=["documents"])             # hermetic temp store: labels for the table
     return svc, dict(zip(got["ids"], got["documents"]))
 

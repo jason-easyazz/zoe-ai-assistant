@@ -253,6 +253,7 @@ async def apply_plan(plan: list[dict], export_name: str, palace: str, *, skip_ga
             confidence=float(meta.get("confidence") or 0.7), status="approved",
             entity_type=meta.get("entity_type") or None, entity_id=meta.get("entity_id") or None,
             metadata=extra, captured_at=p.get("captured_at"),
+            acting=__import__("memory_actor").AUTOMATIC,
         )
         if ref is None:                     # PII scrub / durable dedup: nothing was written
             refused += 1

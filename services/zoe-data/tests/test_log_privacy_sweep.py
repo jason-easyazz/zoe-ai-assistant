@@ -87,11 +87,11 @@ def _fakes(monkeypatch, action, match_id, *, pii_reject=False):
         monkeypatch.setitem(sys.modules, mod.__name__, mod)
 
 
-def _ingest(svc):
+def _ingest(svc, **_kw):
     import expert_dispatch
     return asyncio.run(expert_dispatch._ingest_or_supersede(
         svc, FACT, user_id="user-test-1", source="test", session_id="sess-1", user_turn_id=None,
-        memory_type="fact", confidence=0.9, tags=[]))
+        memory_type="fact", confidence=0.9, tags=[], acting=__import__("memory_actor").AUTOMATIC))
 
 
 @pytest.mark.parametrize("action,match_id,ref,pii,marker,outcome", [

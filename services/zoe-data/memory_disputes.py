@@ -19,6 +19,7 @@ Everything here is best-effort and never raises into a turn.
 """
 from __future__ import annotations
 
+import memory_actor
 import datetime
 import json
 import logging
@@ -107,6 +108,7 @@ async def queue_questions(svc, user_id: str, session_id: str, user_message: str 
 async def resolve(user_id: str, candidate_id: str, *, accept: bool, svc=None) -> bool:
     """The person's answer: ``accept`` -> approve the candidate (it becomes ``user_confirmed``
     and retires the disputed row); otherwise reject it (the old row stands)."""
+    acting = memory_actor.member(user_id)
     try:
         if svc is None:
             from memory_service import get_memory_service
@@ -116,7 +118,7 @@ async def resolve(user_id: str, candidate_id: str, *, accept: bool, svc=None) ->
         if cur is None or (cur.metadata.get("user_id") or cur.metadata.get("wing")) != user_id:
             return False
         done = await svc.review(candidate_id, decision="approve" if accept else "reject",
-                                actor=user_id, note="dispute answered by the person")
+                                actor=user_id, note="dispute answered by the person", acting=acting)
         return done is not None
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_disputes.resolve failed (%s)", type(exc).__name__)
@@ -134,7 +136,7 @@ async def expire_stale(svc, user_id: str, *, ttl_days: int = TTL_DAYS, now: Opti
             if float((c.metadata or {}).get("added_ts") or 0) > cutoff:
                 continue
             if await svc.review(c.id, decision="reject", actor="operator",
-                                note=f"stale dispute: unanswered for {ttl_days} days") is not None:
+                                note=f"stale dispute: unanswered for {ttl_days} days", acting=memory_actor.AUTOMATIC) is not None:
                 n += 1
                 logger.info("STALE_DISPUTE user=%s kind=%s", user_id,
                             (c.metadata or {}).get("authority_basis") or "authority_blocked")

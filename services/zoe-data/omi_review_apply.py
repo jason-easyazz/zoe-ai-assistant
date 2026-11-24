@@ -39,6 +39,7 @@ claim left stale by a crash is re-taken after ``STALE_CLAIM_S`` with an existenc
 """
 from __future__ import annotations
 
+import memory_actor
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -214,6 +215,7 @@ async def write_person(user_id: str, c: dict, via: str) -> str:
 
 
 async def write_owner_fact(user_id: str, c: dict, via: str) -> str:
+    acting = memory_actor.member(user_id)
     import memory_authority as auth
     from memory_service import get_memory_service
 
@@ -230,7 +232,7 @@ async def write_owner_fact(user_id: str, c: dict, via: str) -> str:
         c["payload"]["fact"], user_id=user_id, source=dr.WRITER, origin=dr.WRITER, memory_type="fact",
         confidence=0.9, source_excerpt=ev.get("quote") or None, anchor_text=ev.get("quote") or None,
         turn_ref=f"omi_recording:{ev.get('recording_id', '')}", authority="user_confirmed",
-        metadata={"provenance": dr.PROVENANCE, **_prov(c, via)})
+        metadata={"provenance": dr.PROVENANCE, **_prov(c, via)}, acting=acting)
     if ref is None:                                # the forget shield, an opt-out, a dedup: NOT written, and the owner is told
         raise ApplyError("not_stored")
     return f"memory:{ref.id}"
@@ -254,6 +256,7 @@ async def write_person_fact(user_id: str, c: dict, via: str) -> str:
     the owner's own words > confirmed > inferred, and a fact the person said about themself (``stated_by_subject``) and one the owner
     said about them (``owner_stated``) never silently overwrite each other: this is ADD only, and a contradiction with ANY approved
     row about the person - whoever said it, whatever wrote it - is held for the owner (``held_conflict``)."""
+    acting = memory_actor.member(user_id)
     from memory_service import get_memory_service
 
     p = c["payload"]
@@ -282,7 +285,7 @@ async def write_person_fact(user_id: str, c: dict, via: str) -> str:
         turn_ref=dr.turn_ref_for(segs, str(ev.get("recording_id") or "")), authority="user_confirmed",
         entity_type="person", entity_id=person["id"], tags=["person", "pendant"],
         metadata={"provenance": dr.PROVENANCE, **_prov(c, via), "stated_by": p.get("stated_by") or dr.OWNER_STATED,
-                  "person_id": person["id"], "segment_ids": segs, "edited_by_owner": bool(p.get("edited_by_owner"))})
+                  "person_id": person["id"], "segment_ids": segs, "edited_by_owner": bool(p.get("edited_by_owner"))}, acting=acting)
     if ref is None:                            # the forget shield, an opt-out, a dedup: NOT written, and the owner is told
         raise ApplyError("not_stored")
     return f"memory:{ref.id}"
@@ -428,7 +431,7 @@ async def unwrite(user_id: str, rows: list, *, gate_held: bool = False) -> int:
                         if any(_written_by(m, cid) for cid in cids)]
         if mem:
             # ``gate_held``: the forgets that reach here from the day review already hold the member's erase gate (not reentrant)
-            out = await svc.erase_rows(user_id, mem, actor=user_id, reason="forgotten by request (pendant review)", gate_held=gate_held)
+            out = await svc.erase_rows(user_id, mem, actor=user_id, reason="forgotten by request (pendant review)", acting=memory_actor.AUTOMATIC, gate_held=gate_held)
             n += int(out.get("rows_removed") or 0)
     if rels:
         from db_compat import get_compat_db

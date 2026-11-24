@@ -9,6 +9,7 @@ Changes from v2:
 - _store_person_memory updated to emit context+circle in fact text
 """
 
+import memory_actor
 import asyncio
 import json
 import uuid
@@ -153,6 +154,7 @@ async def _store_person_memory(db, user_id: str, person: dict, action: str):
                 tags=["person", action],
                 entity_type="person",
                 entity_id=person.get("id"),
+                acting=memory_actor.AUTOMATIC,
             )
         except MemoryServiceError as exc:
             import logging as _lg
@@ -589,7 +591,7 @@ async def _delete_person(
 async def _archive_person_mempalace(person_id: str, user_id: str) -> None:
     try:
         from memory_service import get_memory_service
-        await get_memory_service().archive_by_entity(entity_id=person_id, user_id=user_id)
+        await get_memory_service().archive_by_entity(entity_id=person_id, user_id=user_id, acting=memory_actor.AUTOMATIC)
     except Exception as exc:
         import logging as _lg
         _lg.getLogger(__name__).debug("MemPalace archive failed for %s: %s", person_id, exc)

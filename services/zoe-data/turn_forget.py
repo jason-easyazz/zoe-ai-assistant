@@ -31,6 +31,7 @@ turn and asks which thing to forget instead of guessing. The durable half (the n
 """
 from __future__ import annotations
 
+import memory_actor
 import contextvars
 import hashlib
 import itertools
@@ -480,7 +481,7 @@ async def finish_parked(user_id: str, entry: dict) -> dict:
             await pa._erase_words(user_id, memory_space._explained_for(rid, ref), ref.text or "")
     if not physical_erase_enabled():
         return {"rows": row_ids}
-    result = await svc.erase_rows(user_id, row_ids, actor=user_id, reason="forgotten by request (finished after the shadow confirmed)", finish_missing=True)
+    result = await svc.erase_rows(user_id, row_ids, actor=user_id, reason="forgotten by request (finished after the shadow confirmed)", finish_missing=True, acting=memory_actor.AUTOMATIC)
     if (result.get("physical") or {}).get("ok") is False:
         return {"rows": row_ids}   # rows can be gone while their physical cleanup still needs retrying
     left = [rid for rid in present if await svc.get(rid, strict=True) is not None]      # read back: done only when the row is gone

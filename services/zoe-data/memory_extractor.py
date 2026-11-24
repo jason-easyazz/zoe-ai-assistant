@@ -9,6 +9,7 @@ persist them through MemoryService. It is intentionally lightweight:
 
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import hashlib
 import logging
@@ -1255,6 +1256,7 @@ async def extract_and_ingest(
                     source_excerpt=turn_excerpt,
                     session_id=session_id,
                     **_verdict_kw,
+                    acting=memory_actor.AUTOMATIC,
                 )
                 if new_ref is not None:
                     saved += 1
@@ -1279,6 +1281,7 @@ async def extract_and_ingest(
             entity_id=entity_id,
             source_excerpt=turn_excerpt,
             **_verdict_kw,
+            acting=memory_actor.AUTOMATIC,
         )
         if ref is not None:
             saved += 1
@@ -1300,6 +1303,7 @@ async def extract_and_ingest(
                 status=status,
                 tags=["conversation", "pasted"],
                 metadata=dict(provenance="pasted", pasted_kind=own.kind),
+                acting=memory_actor.AUTOMATIC,
             )
             note_saved = note_ref is not None
         except Exception as exc:  # noqa: BLE001 - the note is a courtesy; it must never cost the turn

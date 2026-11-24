@@ -40,6 +40,7 @@ Safety rails enforced here, not in callers:
 
 from __future__ import annotations
 
+import memory_actor
 import asyncio
 import contextlib
 import functools
@@ -2282,7 +2283,7 @@ class MemoryService:
     async def ingest(
         self,
         text: str,
-        *,
+        *, acting: "memory_actor.Acting",
         user_id: str,
         source: str,
         session_id: Optional[str] = None,
@@ -2353,6 +2354,7 @@ class MemoryService:
         voice lane's "the speaker-id did not confirm the member" (a self-fact becomes
         ``user_unverified``; ``None`` = the lane reports no verdict).
         """
+        memory_actor.check(acting)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "ingest")
         if not text or not text.strip():
@@ -2946,7 +2948,7 @@ class MemoryService:
     # The WHOLE erase, first step to after the memory lock is released, runs inside ``user_erase_gate.erase_span``: every background
     # write scheduled for the member before it ends is dropped, even one scheduled between two inner erasers (decorator: no reindent).
     @_erase_gate.whole_member_erase
-    async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
+    async def delete_user(self, user_id: str, *, acting: "memory_actor.Acting", actor: str, reason: str = "") -> int:
         """Right-to-be-forgotten. Returns number of rows removed. (The user's queued access ticks are dropped first.)
 
         A hard delete is the one removal that bypasses the ``status`` lifecycle, so it must not be
@@ -2958,6 +2960,7 @@ class MemoryService:
         survive the purge of the user's own per-row trail (that trail carries text and is removed). A
         sweep that matches no rows writes nothing — it removes nothing. Documented in
         docs/knowledge/memory-loss-audit-2026-10-05.md."""
+        memory_actor.check(acting)
         self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
@@ -3239,13 +3242,14 @@ class MemoryService:
 
     async def sweep_soft_archive(
         self,
-        *,
+        *, acting: "memory_actor.Acting",
         user_id: str,
         actor: str = "decay_sweep",
         min_age_days: int = 30,
         score_threshold: float = 0.02,
     ) -> list[str]:
         """Soft-archive low-score approved memories."""
+        memory_actor.check(acting)
         self._require(user_id, "user_id is required")
         approved = await self.list_by_status(
             user_id=user_id, status="approved", limit=10_000
@@ -3289,6 +3293,7 @@ class MemoryService:
                     decision="archive",
                     actor=actor,
                     note=f"soft-archive: score<{score_threshold}, age>={min_age_days}d",
+                    acting=acting,
                 ) is not None:       # None = refused (the authority wall: a row the user said)
                     archived.append(mid)
             except Exception as exc:
@@ -3318,7 +3323,7 @@ class MemoryService:
     async def review(
         self,
         mem_id: str,
-        *,
+        *, acting: "memory_actor.Acting",
         decision: str,
         actor: str,
         edits: Optional[str] = None,
@@ -3372,6 +3377,7 @@ class MemoryService:
         the same opt-out wall. Every such caller already treats None as
         "supersede failed" and falls through to ``ingest``, which drops.
         """
+        memory_actor.check(acting)
         decision = decision.lower().strip()
         if decision not in {"approve", "reject", "archive", "edit"}:
             raise MemoryServiceError(
@@ -3714,7 +3720,7 @@ class MemoryService:
         return MemoryRef(id=new_id, text=scrubbed, metadata=new_meta)
 
     async def supersede_by(
-        self, user_id: str, old_id: str, new_id: str, *, actor: str, note: str = "",
+        self, user_id: str, old_id: str, new_id: str, *, acting: "memory_actor.Acting", actor: str, note: str = "",
     ) -> bool:
         """Retire ``old_id`` in favour of an EXISTING row ``new_id`` (metadata-only).
 
@@ -3726,6 +3732,7 @@ class MemoryService:
         (epoch seconds). New row: ``supersedes_id`` (first link wins) and ``valid_from``.
         ``col.update`` without documents keeps both embeddings. Never raises.
         """
+        memory_actor.check(acting)
         if not user_id or not old_id or not new_id or old_id == new_id:
             return False
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
@@ -3787,7 +3794,7 @@ class MemoryService:
         return True
 
     async def retire_with_quote(
-        self, user_id: str, old_id: str, *, quote: str, turn_ref: str, lane: str, cue: str = "",
+        self, user_id: str, old_id: str, *, acting: "memory_actor.Acting", quote: str, turn_ref: str, lane: str, cue: str = "",
         actor: str = "quote_retire",
     ) -> bool:
         """Retire ``old_id`` because the OWNER said, in their own words, that it is no longer true (``memory_retire``).
@@ -3799,6 +3806,7 @@ class MemoryService:
         returns it; the text is never touched, nothing is deleted) and carries the verbatim sentence (``retire_quote``), the
         turn (``retire_turn_ref``), the lane and the cue that opened the door. ``col.update`` without documents keeps the
         embedding. The audit row names the retirement and never the sentence. Never raises; True only when a row changed."""
+        memory_actor.check(acting)
         quote = (scrub_source_excerpt(quote, limit=300) or "").strip()
         if not user_id or not old_id or not quote or lane not in ("chat", "voice"):
             return False
@@ -4192,11 +4200,12 @@ class MemoryService:
             return ""
         return _auth.row_class(target.metadata or {}, target.text) if target is not None else ""
 
-    async def set_curated_standing(self, user_id: str, mem_ids: Iterable[str], *, protect: bool, actor: str) -> int:
+    async def set_curated_standing(self, user_id: str, mem_ids: Iterable[str], *, acting: "memory_actor.Acting", protect: bool, actor: str) -> int:
         """Restamp curated rows (``origin="curator"``) of ``user_id``: ``protect`` -> the ``curated`` class (only a curator changes
         them), else ``user_stated`` (the member own word wins again; ``authority_basis="curated_released"``, origin kept). The
         adult opt-out / opt-in of a category (``memory_curation``). Only approved curated rows the member owns are touched; each is
         audited. Returns how many changed."""
+        memory_actor.check(acting)
         want = [str(i) for i in mem_ids if i]
         if not user_id or not want:
             return 0
@@ -4222,12 +4231,13 @@ class MemoryService:
             _invalidate_agent_user_facts_cache(user_id)
         return len(changed)
 
-    async def archive_duplicate(self, mem_id: str, keeper_id: str, *, actor: str,
+    async def archive_duplicate(self, mem_id: str, keeper_id: str, *, acting: "memory_actor.Acting", actor: str,
                                 note: str = "identical duplicate") -> bool:
         """Archive ``mem_id`` because ``keeper_id`` says EXACTLY the same thing (normalised
         text) and is approved, the same user's, and of at least the same class: nothing is
         lost, so no authority is needed beyond that (the weekly merge used to REWRITE the
         weaker row - 6,585 no-op edits). Never raises; returns whether it archived."""
+        memory_actor.check(acting)
         try:
             cur, keep = await self.get(mem_id), await self.get(keeper_id)
             if cur is None or keep is None or mem_id == keeper_id:
@@ -4272,7 +4282,7 @@ class MemoryService:
             logger.warning("memory_service: archive_duplicate failed (%s)", type(exc).__name__)
             return False
 
-    async def flag_challenged(self, mem_id: str, *, user_id: str, utterance: str,
+    async def flag_challenged(self, mem_id: str, *, acting: "memory_actor.Acting", user_id: str, utterance: str,
                               actor: str = "trait_challenge") -> bool:
         """The owner HEDGED or DENIED what this approved row says about them ("I'm not sure I'm a
         man of faith"): park it as ``pending`` so it is no longer served as fact, and leave it in
@@ -4280,6 +4290,7 @@ class MemoryService:
         opposite, only that the claim is not settled - so the row keeps its text and provenance and
         an approve restores it. Only the row's own user may do this; any other row is refused.
         Never raises; returns whether it flagged."""
+        memory_actor.check(acting)
         try:
             if not user_id:
                 return False
@@ -4327,7 +4338,7 @@ class MemoryService:
     async def record_candidate(
         self,
         text: str,
-        *,
+        *, acting: "memory_actor.Acting",
         user_id: str,
         writer: str,
         contradicts: str = "",
@@ -4337,6 +4348,7 @@ class MemoryService:
         """Public form of the candidate write for the people-graph writers: a PENDING,
         inferred row that disagrees with something the user said (``conflicts_with`` may be
         a graph edge id, written as ``edge:<id>``)."""
+        memory_actor.check(acting)
         return await self._write_candidate(
             text, user_id=user_id, writer=writer, contradicts=contradicts, kind=kind, **kw)
 
@@ -4579,9 +4591,9 @@ class MemoryService:
         """A night write that raced a member erase (``erase_watermark.guarded_write``) is removed through the audited erase, under the
         member's lock this caller already holds. RAISES when it cannot (the row must not quietly stay)."""
         await self.erase_rows(user_id, ids, actor=f"night_undo:{phase}"[:64], reason="night write raced a member erase",
-                              lock_held=True, reach_shadow=False)   # the night's own fresh rows, never shadowed; under the memory lock
+                              lock_held=True, reach_shadow=False, acting=memory_actor.AUTOMATIC)   # the night's own fresh rows, never shadowed; under the memory lock
 
-    async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
+    async def erase_rows(self, user_id: str, ids: Iterable[str], *, acting: "memory_actor.Acting", actor: str,
                          reason: str = "forgotten by request", gate_held: bool = False, lock_held: bool = False,
                          reach_shadow: bool = True, finish_missing: bool = False) -> dict[str, Any]:
         """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
@@ -4591,6 +4603,7 @@ class MemoryService:
         rows ``user_id`` owns are touched. ``reason`` must never carry the forgotten name. Fail-closed: if the
         intent row cannot be written nothing is deleted. ``finish_missing`` is the parked replay: clean the owned audit trail and
         physical residue even when the rows already went, and raise if physical cleanup fails. Returns counts only."""
+        memory_actor.check(acting)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "erase_rows")
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
@@ -5631,7 +5644,8 @@ class MemoryService:
             col.update(ids=got_ids, metadatas=new_metas)
 
     async def relink_entity(
-        self, user_id: str, mem_id: str, entity_type: str, entity_id: str
+        self, user_id: str, mem_id: str, entity_type: str, entity_id: str,
+        *, acting: "memory_actor.Acting"
     ) -> bool:
         """Re-key a still-pending person fact's entity link (metadata-only).
 
@@ -5647,6 +5661,7 @@ class MemoryService:
         id is unknown, owned by another user, or no longer ``person_pending``
         (idempotent + race-safe).
         """
+        memory_actor.check(acting)
         if not user_id or not mem_id:
             return False
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
@@ -5809,12 +5824,13 @@ class MemoryService:
         ]
         return rows
 
-    async def archive_by_entity(self, entity_id: str, user_id: str) -> int:
+    async def archive_by_entity(self, entity_id: str, user_id: str, *, acting: "memory_actor.Acting") -> int:
         """Archive all MemPalace facts for a given entity (e.g. when a person is deleted).
 
         Queries Chroma for documents whose metadata has entity_id=<entity_id> and
         user_id=<user_id>, then archives each one. Returns count archived.
         """
+        memory_actor.check(acting)
         try:
             # Offload the blocking full-collection metadata scan to the executor,
             # matching every other Chroma access in this module — running col.get()
@@ -5828,6 +5844,7 @@ class MemoryService:
                         decision="archive",
                         actor="system",
                         note="entity_deleted",
+                        acting=acting,
                     )
                     archived += 1
                 except Exception as exc:

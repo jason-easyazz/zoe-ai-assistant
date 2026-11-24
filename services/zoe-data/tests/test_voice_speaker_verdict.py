@@ -294,7 +294,7 @@ def test_expert_dispatch_carries_the_verdict_to_the_voice_fact_writer(svc, monke
     async def store(text, verdict):
         return await expert_dispatch._ingest_or_supersede(
             svc, text, user_id=UID, source="voice_fact", session_id="s1", user_turn_id=None,
-            memory_type="fact", confidence=0.85, tags=["voice", "self"], speaker_verified=verdict)
+            memory_type="fact", confidence=0.85, tags=["voice", "self"], speaker_verified=verdict, acting=__import__("memory_actor").AUTOMATIC)
 
     asyncio.run(store("User's dog is named Biscuit.", False))
     assert _rows(svc, "Biscuit") == [("user_unverified", "pending")]

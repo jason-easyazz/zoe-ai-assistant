@@ -85,7 +85,7 @@ def test_a_model_guess_never_retypes_a_stored_subject(candidate, stored):
     svc = _Svc(stored)
     assert run(mq.reconcile_for_ingest(svc, candidate, UID)) == ("refuse", "r0")
     assert run(ed._ingest_or_supersede(svc, candidate, user_id=UID, source="idle_consolidation", session_id="s", user_turn_id="t",
-                                       memory_type="fact", confidence=0.8, tags=[])) == "dropped"      # honest: NOT stored
+                                       memory_type="fact", confidence=0.8, tags=[], acting=__import__("memory_actor").AUTOMATIC)) == "dropped"      # honest: NOT stored
     assert svc.ingested == [] and svc.archived == []          # no new row of another kind, the stored row stands
 
 
@@ -941,7 +941,7 @@ def test_the_other_refusal_paths_log_no_fact(mem, monkeypatch, caplog):
     caplog.set_level(logging.DEBUG)
     svc = _Svc(f"User's son is named {SECRET_NAME}", hits=set())
     assert run(ed._ingest_or_supersede(svc, SECRET_FACT, user_id=UID, source="idle_consolidation", session_id="s",
-                                       user_turn_id="t", memory_type="fact", confidence=0.8, tags=[])) == "dropped"
+                                       user_turn_id="t", memory_type="fact", confidence=0.8, tags=[], acting=__import__("memory_actor").AUTOMATIC)) == "dropped"
     _people(monkeypatch, SECRET_NAME)
     assert run(mq.reconcile_for_ingest(_Svc(hits=set()), SECRET_FACT, UID))[0] == "refuse"
     son = run(mem.ingest(f"User's son is named {SECRET_NAME}", user_id=UID, source="turn_digest"))

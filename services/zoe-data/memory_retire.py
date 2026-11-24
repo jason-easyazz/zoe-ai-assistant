@@ -38,6 +38,7 @@ decision can be measured before anything is applied; the logs carry ids, ranks a
 """
 from __future__ import annotations
 
+import memory_actor
 import hashlib
 import json
 import logging
@@ -394,7 +395,7 @@ async def decide(svc: Any, user_id: str, prep: Prepared, *, pick: Optional[int] 
         return done("refused", R_NOT_ELIGIBLE, chosen, rank)
     if m == "shadow":
         return done("shadow", "would_retire", chosen, rank)
-    ok = await svc.retire_with_quote(user_id, chosen.id, quote=quote, turn_ref=prep.turn_ref, lane=lane, cue=prep.cue)
+    ok = await svc.retire_with_quote(user_id, chosen.id, quote=quote, turn_ref=prep.turn_ref, lane=lane, cue=prep.cue, acting=memory_actor.AUTOMATIC)
     if not ok:
         return done("refused", R_STORE, chosen, rank)
     import write_receipts

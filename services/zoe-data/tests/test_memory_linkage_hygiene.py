@@ -143,7 +143,7 @@ class _FakeCollectionSvc:
     def _collection(self):
         return self._col
 
-    async def relink_entity(self, user_id, mem_id, entity_type, entity_id):
+    async def relink_entity(self, user_id, mem_id, entity_type, entity_id, **_kw):
         # Mirror MemoryService.relink_entity's guards: owner + still-pending only.
         meta = self._col._meta(mem_id)
         if meta is None:
