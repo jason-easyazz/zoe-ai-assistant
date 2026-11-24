@@ -526,6 +526,8 @@ async def _telegram_send(chat_id: str, text: str, url: str) -> bool:
 async def send_to_phone(handoff_id: str) -> dict[str, Any]:
     """Deliver the phone link to the owner's linked Telegram chat. Returns
     ``{"ok", "status": "sent"|"unavailable"|"failed", "detail"}``."""
+    import message_door
+    stamps_at = message_door.stamps_now()      # ZOE_OS_MESSAGES=kernel: taken before anything is awaited (None while off)
     async with _db_ctx() as db:
         row = await _row(db, handoff_id)
     if row is None or row["status"] == "done" or float(row["expires_at"]) < time.time():
@@ -536,6 +538,10 @@ async def send_to_phone(handoff_id: str) -> dict[str, Any]:
         return {"ok": False, "status": "unavailable",
                 "detail": "Scan the code instead." if url else "Start again to get a fresh link."}
     what = str(row["provider"] or "your account")
+    try:      # the member's own phone: the Zoe OS kernel is asked first (door off: nothing); a refusal sends nothing
+        asked = await message_door.ask(message_door.TELEGRAM, row["user_id"], recipient=row["user_id"], stamps_at=stamps_at)
+    except message_door.MessageRefused as exc:
+        return {"ok": False, "status": "unavailable", "detail": exc.line()}
     try:
         sent = await _telegram_send(chat, f"Tap to finish connecting {what} to Zoe (home Wi-Fi only; "
                                           f"expires in {max(1, int(float(row['expires_at']) - time.time()) // 60)} min).",
@@ -543,6 +549,7 @@ async def send_to_phone(handoff_id: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - type only: an httpx error can carry the token-bearing URL
         logger.info("auth_handoff: telegram send failed (%s)", type(exc).__name__)
         sent = False
+    message_door.sent(asked, bool(sent))
     if not sent:
         return {"ok": False, "status": "failed", "detail": "Couldn't reach Telegram — scan the code instead."}
     await _transition(handoff_id, row["status"], "Sent to your phone — open it there.")

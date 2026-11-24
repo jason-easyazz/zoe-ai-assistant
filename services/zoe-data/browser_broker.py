@@ -9,6 +9,7 @@ This module is intentionally lightweight for phase-1 rollout:
 
 from __future__ import annotations
 
+import lookup_door
 import base64
 import re
 import time
@@ -762,6 +763,7 @@ async def fetch_page_text(
     Never raises for an ordinary failure — returns ``{"ok": False, "error": ...}``
     so a caller enriching a search packet degrades instead of exploding.
     """
+    lookup_door.check(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     import importlib.util
 
     if importlib.util.find_spec("cloakbrowser") is None:
@@ -790,6 +792,7 @@ async def fetch_page_text(
         page = await context.new_page()
         await guard_browser_page(page)
         await page.goto(url, wait_until=wait_until, timeout=timeout_ms)
+        lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
         final_url = page.url
         extracted, settle_log = await settle_and_extract(
             page, policy=settle or SettlePolicy(), text_limit=text_limit
@@ -840,6 +843,7 @@ async def execute_text_extraction(
     text_limit: int = 20_000,
 ) -> dict[str, Any]:
     """Run text extraction through the broker's normal plan/execute pipeline."""
+    lookup_door.check(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     plan = broker.plan_action(
         action="extract_text",
         params={"url": url, "text_limit": text_limit},
@@ -864,6 +868,7 @@ def build_cloak_executor() -> BrowserExecutor | None:
         return None
 
     async def _execute(plan: BrowserActionPlan) -> dict[str, Any]:
+        lookup_door.check(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
         try:
             from cloakbrowser import launch_context_async  # type: ignore[import]
             action_log: list[dict] = []
@@ -890,6 +895,7 @@ def build_cloak_executor() -> BrowserExecutor | None:
                 await guard_browser_page(page)
                 action_log.append({"action": "navigate", "url": url})
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                lookup_door.sent(lookup_door.WEB_FETCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
                 final_url = page.url
                 action_log.append({"action": "loaded", "url": final_url})
 
@@ -1009,6 +1015,7 @@ async def search_web(
     domain}``; non-http(s) targets never appear. ``ok`` is True only for
     ``results``. Never raises.
     """
+    lookup_door.check(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: nothing leaves for someone off the roster; off = a flag read
     import asyncio
     import logging
 
@@ -1031,7 +1038,7 @@ async def search_web(
         loop = asyncio.get_running_loop()
         # +0.5 s: the lookup honours `bound` itself; this is the hard wall for a
         # provider that does not (the worker thread then finishes on its own).
-        outcome = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=bound + 0.5)
+        outcome = await asyncio.wait_for(loop.run_in_executor(None, lookup_door.carry(_run)), timeout=bound + 0.5)
     except asyncio.TimeoutError:
         log.info("search_web: timeout after %.1fs query_len=%d", bound, len(q))
         return {"ok": False, "status": "timeout", "results": [], "domains": [],

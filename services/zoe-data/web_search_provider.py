@@ -25,6 +25,8 @@ No new dependency: uses ``httpx``, already a service dependency.
 from __future__ import annotations
 
 import logging
+
+import lookup_door
 from typing import Any
 
 from typed_env import env_str
@@ -126,6 +128,7 @@ def tavily_search_outcome(
                     "max_results": max(1, min(int(max_results), 20)),
                 },
             )
+            lookup_door.sent(lookup_door.WEB_SEARCH)      # ZOE_OS_LOOKUPS=kernel: it has been sent: told to the kernel now; off = a flag read
         if resp.status_code != 200:
             # 401 = bad/absent key, 429 = quota exhausted. Both are expected
             # operational states, not crashes — fall back quietly.

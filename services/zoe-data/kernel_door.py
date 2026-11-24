@@ -13,7 +13,7 @@ what differs: its verbs, how it reads who a thing belongs to, and its refusal se
 from __future__ import annotations
 
 import contextvars
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from typing import Optional
 
@@ -75,9 +75,21 @@ def note_actor(user_id: Optional[str]) -> None:
     """An entry point has identified its caller: a member id, or a guest / panel id (nobody identified: the shared panel).
     Taken with the erase stamps of this moment, before anything about the action is read. Never raises; doors off: flag reads."""
     try:
-        _ACTOR.set((str(user_id or "guest"), stamps_now("music", "home")))
+        _ACTOR.set((str(user_id or "guest"), stamps_now("music", "home", "lookups")))
     except Exception:  # noqa: BLE001 - identifying the caller for a door must never break the request
         pass
+
+
+@contextmanager
+def actor_scope():
+    """Around ONE call that notes who it is for: on the way out the actor is put back exactly as it was on the way in, so
+    nothing noted inside outlives the call. A loop that serves call after call in ONE task (the stdio tool server) must use
+    this: without it the first caller noted stays the actor of every later call."""
+    was = _ACTOR.get()
+    try:
+        yield
+    finally:
+        _ACTOR.set(was)
 
 
 def acting() -> Optional[tuple]:

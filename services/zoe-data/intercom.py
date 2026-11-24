@@ -364,6 +364,8 @@ async def handle(text: str, user_id: str, *, extra_ctx: Optional[dict[str, Any]]
                  now: Optional[datetime] = None) -> Optional[tuple[Request, Decision, str]]:
     """Parse, decide and (mode ``on`` and writes allowed) queue. Returns (request, decision, reply) or None when ``text`` is not an
     intercom request. Raises only on a DB failure (``tier`` owns swallowing)."""
+    import message_door
+    stamps_at = message_door.stamps_now()      # ZOE_OS_MESSAGES=kernel: taken before anything is awaited (None while off)
     from db_compat import get_compat_db
 
     import voice_announce
@@ -385,6 +387,10 @@ async def handle(text: str, user_id: str, *, extra_ctx: Optional[dict[str, Any]]
                     mode(), req.kind, req.target or "*", int(d.allowed), d.action, d.reason, len(d.targets),
                     "yes" if member else "no")
         if d.allowed and allow_writes and mode() == "on":
+            try:      # the member's words on the house's panels: the Zoe OS kernel is asked first (door off: nothing)
+                asked = await message_door.ask(message_door.PANEL, member, stamps_at=stamps_at)
+            except message_door.MessageRefused as exc:
+                return req, d, exc.line()      # refused: nothing is queued, and the member hears why
             name = await _sender_name(member or "")
             where = origin_label(panels, origin)
             line = spoken_line("announce" if d.action == "announce" else "ring", name, req.message, where)
@@ -394,6 +400,7 @@ async def handle(text: str, user_id: str, *, extra_ctx: Optional[dict[str, Any]]
                 await voice_announce.enqueue_announcement(
                     db, user_id=member or "", message=line, panel_id=panel, trigger_type=trigger, ttl_s=ttl, commit=False)
             await db.commit()
+            message_door.sent(asked, True)
     return req, d, reply
 
 
