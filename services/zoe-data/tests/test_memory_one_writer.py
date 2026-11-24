@@ -1,7 +1,7 @@
 """Only ``memory_service.py`` writes the memory rows (the palace collection), bar FOUR named bypass writes.
 
 The rows are a collection, not SQL, so the scan is over calls, over the WHOLE service at once (``scan``): a write call
-(``upsert``, ``update``, ``delete``, ``add``, ``modify``, also ``getattr(col, "delete")(...)``) on anything that came from the
+(``upsert``, ``update``, ``delete``, ``add``, ``modify``, also ``getattr(col, "delete")``; FETCHED is enough: ``erase = col.delete``) on anything that came from the
 collection (``leased_drawers(...)``, ``._collection()``, ``get_drawers_collection(...)``, ``get_collection`` /
 ``get_or_create_collection`` / ``create_collection``, or any function that RETURNS one; through any chain of assignments, an
 attribute it was stored in, a closure, a module-level or ``global`` handle, a parameter such a value is passed to in ANY module,
@@ -83,8 +83,10 @@ def scan(modules: dict) -> Counter:
     a name bound to it in the unit or an enclosing one (assignment, tuple unpacking, walrus, ``with ... as``, ``for``, a
     ``global``); a parameter a caller ANYWHERE in the set passes it to (callees found by bare name, so a helper in another
     module is followed through its import, a method on an object by its name anywhere); a parameter called the collection; an ATTRIBUTE some unit stored it in (``self.col = ...``, keyed by
-    attribute name over the whole set); either branch of ``a if c else b`` / ``a or b``. A write is a WRITES method named on it
-    (called, or handed on as a callable) or ``getattr(<it>, "<write>")``."""
+    attribute name over the whole set); either branch of ``a if c else b`` / ``a or b``. A write is a WRITES method FETCHED off it
+    (called there, stored, or handed on as a callable: the fetch is the site) or ``getattr(<it>, name)`` with a WRITES name or
+    any name that is not a constant; the one ``getattr`` that is not a site is the argument of ``callable(...)`` (a probe that
+    yields a bool, the method never leaves it)."""
     units, parent, globals_of = {}, {}, {}
     local, top, methods = {}, {}, {}        # (module, bare) -> units; (module, bare) -> top-level units; bare -> methods
     imported, modnames = {}, {}             # (module, local name) -> (module, bare); (module, local name) -> module
@@ -208,17 +210,20 @@ def scan(modules: dict) -> Counter:
                                 changed = True
                 if changed:
                     names = names_of(u)
+    probes = {id(n.args[0]) for nodes in own.values() for n in nodes                # ``callable(getattr(col, "update", None))``
+              if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "callable" and len(n.args) == 1}
     found: Counter = Counter()
     for u, nodes in own.items():
         names = names_of(u)
         for node in nodes:
-            # the write method named on a collection: called here, or handed on as a callable (``_store(col.update, ...)``)
+            # the write method named on a collection: called here, or FETCHED (``erase = col.delete``, ``self.erase = col.delete``,
+            # ``run(col.update, ...)``): the fetch is the write site, wherever the bound method is called later
             if isinstance(node, ast.Attribute) and node.attr in WRITES and is_col(node.value, names):
                 found[u] += 1
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Call) and getattr(node.func.func, "id", "") == "getattr" \
-                    and len(node.func.args) >= 2 and isinstance(node.func.args[1], ast.Constant) \
-                    and node.func.args[1].value in WRITES and is_col(node.func.args[0], names):
-                found[u] += 1                               # ``getattr(col, "delete")(...)``; a bare ``getattr`` probe is a read
+            elif isinstance(node, ast.Call) and getattr(node.func, "id", "") == "getattr" and len(node.args) >= 2 \
+                    and is_col(node.args[0], names) and id(node) not in probes \
+                    and (not isinstance(node.args[1], ast.Constant) or node.args[1].value in WRITES):
+                found[u] += 1       # ``getattr(col, "delete")`` called at once or later, or ``getattr(col, name)``: any name may write
     return found
 
 
@@ -351,6 +356,45 @@ def elsewhere(keeper):
         ("a.py", "created"): 1})
 
 
+def test_a_write_method_fetched_first_and_called_later_is_a_write():
+    """Round 4: the bound write method fetched off the collection and called later, in every form: by attribute into a name,
+    into an attribute, handed to a helper; by ``getattr`` with a constant name into a name, with a NON-constant name (kept, and
+    called at once), and the old immediate ``getattr(col, "delete")(...)``. Each is one write, at the FETCH. A
+    ``callable(getattr(col, "update", None))`` probe and ``getattr(col, "get")`` are reads. Controls run (each fails this
+    test): the ``getattr`` branch put back to the old rule (only a ``getattr`` whose result is called at once: ``by_getattr_later``
+    and ``by_name_kept`` missed); the non-constant case dropped (``by_name_kept`` and ``by_name_called`` missed); the probe
+    exemption dropped (``probe`` counted)."""
+    src = '''
+def by_attr_later(svc, ids):
+    erase = svc._collection().delete
+    erase(ids=ids)
+class Holder:
+    def __init__(self, svc):
+        self.erase = svc._collection().delete
+    def go(self, ids):
+        self.erase(ids=ids)
+def handed(svc, ids):
+    run_later(leased_drawers(svc).update, ids)
+def by_getattr_later(svc, ids):
+    erase = getattr(svc._collection(), "delete")
+    erase(ids=ids)
+def by_name_kept(svc, ids, verb):
+    fn = getattr(leased_drawers(svc), verb)
+    fn(ids=ids)
+def by_name_called(svc, ids, verb):
+    getattr(svc._collection(), verb)(ids=ids)
+def by_getattr_now(svc, ids):
+    getattr(svc._collection(), "delete")(ids=ids)
+def probe(svc):
+    col = svc._collection()
+    return callable(getattr(col, "update", None))
+def reads(svc):
+    return getattr(svc._collection(), "get")(ids=[1])
+'''
+    assert collection_writes(src) == Counter({"by_attr_later": 1, "Holder.__init__": 1, "handed": 1, "by_getattr_later": 1,
+                                              "by_name_kept": 1, "by_name_called": 1, "by_getattr_now": 1})
+
+
 def test_a_later_function_of_the_same_name_does_not_hide_an_earlier_write():
     """Two methods called ``save`` in two classes, and a nested ``save``: each is its own entry, so the earlier one's write
     is still counted. Control run: with ``collection_writes`` keying functions by bare name (the old ``{f.name: f}``), the
@@ -378,6 +422,119 @@ def test_the_memory_service_itself_is_seen_writing():
     assert found["MemoryService._write_row"] == 1 and found["MemoryService._update_row"] >= 1 and sum(found.values()) >= 15
 
 
+# ---- which service methods change the rows: DERIVED from the service's code -------------------------------------------------------
+SERVICE_CLASS = "MemoryService"
+#: the access tick a read schedules for the rows it returned (``access_count``, ``last_accessed``): see ``changing_methods``
+READ_TICK = "_schedule_tick"
+
+
+def changing_methods(source: str, *, through_tick: bool = True) -> set:
+    """The names of the ``MemoryService`` methods that CHANGE the memory rows, read from the service module's source.
+
+    The rule: a method changes the rows when its own body (nested functions included), or any function of the module it NAMES,
+    transitively, makes a write the collection scan (``scan``) finds: a write method on the rows collection or on the audit
+    collection. A method is named as ``self.X`` / ``cls.X`` / ``MemoryService.X`` and a module-level function by its bare name;
+    named means called OR handed on (``self._run_sync(self._tick_access_sync, ...)``,
+    ``self._track_background_task(self._tick_access(...))``), so a write run through an executor or a background task counts.
+
+    ``through_tick=False`` cuts the one edge into ``READ_TICK``: the methods that then stop changing anything are the reads whose
+    ONLY write is the access tick of the rows they returned (``test_the_reads_that_tick_change_nothing_else`` names them)."""
+    tree = ast.parse(source)
+    module_fns = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == SERVICE_CLASS)
+    methods = {n.name: n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    units = {("m", k): v for k, v in methods.items()} | {("f", k): v for k, v in module_fns.items()}
+
+    def owner(qual: str):
+        parts = qual.split(".")
+        if parts[0] == SERVICE_CLASS:
+            return ("m", parts[1]) if len(parts) > 1 else None
+        return ("f", parts[0]) if parts[0] in module_fns else None
+
+    writes = {owner(q) for (_r, q), n in scan({"memory_service.py": source}).items() if n} - {None}
+    edges = {}
+    for key, fn in units.items():
+        out = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                    and node.value.id in ("self", "cls", SERVICE_CLASS) and node.attr in methods:
+                out.add(("m", node.attr))
+            elif isinstance(node, ast.Name) and node.id in module_fns:
+                out.add(("f", node.id))
+        if not through_tick:
+            out.discard(("m", READ_TICK))
+        edges[key] = out - {key}
+    changing = set(writes)
+    grew = True
+    while grew:
+        grew = False
+        for key, out in edges.items():
+            if key not in changing and out & changing:
+                changing.add(key)
+                grew = True
+    return {name for kind, name in changing if kind == "m"}
+
+
+def test_the_mutating_methods_are_derived_from_the_service():
+    """``memory_writers`` lists every method the rule (``changing_methods``) finds, no more: the 13 that take who is acting
+    (``MUTATING``) and the rest (``WITHOUT_ACTING``: counters on rows, a superseded row put back, compaction, the residue scrub); every
+    private method that changes the rows is named by nobody outside the service (else it is a way round the table); the reads
+    whose only write is their access tick are exactly ``READS_THAT_TICK``. Controls run (each fails this): ``tick_access``
+    removed from ``WITHOUT_ACTING`` (the derivation still finds it); a new public method planted in the real service,
+    ``womble_fix``, writing only through ``self._run_sync(self._tick_access_sync, ...)``."""
+    import memory_writers
+
+    found = changing_methods((SVC / "memory_service.py").read_text("utf-8"))
+    no_tick = changing_methods((SVC / "memory_service.py").read_text("utf-8"), through_tick=False)
+    public = {name for name in found if not name.startswith("_")}
+    assert set(memory_writers.MUTATING).isdisjoint(memory_writers.WITHOUT_ACTING)
+    assert public - set(memory_writers.READS_THAT_TICK) == set(memory_writers.MUTATING) | set(memory_writers.WITHOUT_ACTING)
+    assert set(memory_writers.READS_THAT_TICK) == public - no_tick
+    private = {name for name in found if name.startswith("_")}
+    outside = Counter()
+    for rel, path in _modules():
+        if rel != "memory_service.py":
+            outside.update((rel, n.attr) for n in ast.walk(ast.parse(path.read_text("utf-8")))
+                           if isinstance(n, ast.Attribute) and n.attr in private)
+    assert dict(outside) == {}
+
+
+def test_the_derivation_finds_a_new_mutating_method():
+    """A method planted in the service that writes through a private helper run in an executor (``self._run_sync(self._x)``),
+    one that writes through a module function, one that writes the audit collection, and a read that only ticks: the first
+    three are found, the read only with the tick edge, the plain read never. Controls run (each fails this): the edge to a
+    module-level function dropped (``planted_module`` missed); ``through_tick`` ignored (``a_read`` still found without the
+    tick)."""
+    src = '''
+def _module_writer(col):
+    col.delete(ids=[1])
+class MemoryService:
+    def _collection(self):
+        return get_drawers_collection("x")
+    def _audit_collection(self):
+        return None
+    def _x_sync(self, ids):
+        self._collection().update(ids=ids, metadatas=[{}])
+    async def planted_executor(self, ids):
+        await self._run_sync(self._x_sync, ids)
+    def planted_module(self):
+        _module_writer(self._collection())
+    def planted_audit(self):
+        self._audit_collection().add(ids=[1])
+    def _schedule_tick(self, ids):
+        self._track_background_task(self.planted_executor(ids))
+    async def a_read(self, ids):
+        rows = self._collection().get(ids=ids)
+        self._schedule_tick(ids)
+        return rows
+    async def plain_read(self, ids):
+        return self._collection().get(ids=ids)
+'''
+    assert changing_methods(src) == {"_x_sync", "planted_executor", "planted_module", "planted_audit", "_schedule_tick", "a_read"}
+    assert changing_methods(src, through_tick=False) == {"_x_sync", "planted_executor", "planted_module", "planted_audit",
+                                                         "_schedule_tick"}
+
+
 # ---- every call of a mutating method, and who is acting there -------------------------------------------------------------------
 def mutating_calls(source: str, rel: str) -> Counter:
     """``{(module, function, method): calls}`` of the mutating method names in one module (nested functions by dotted name).
@@ -388,16 +545,17 @@ def mutating_calls(source: str, rel: str) -> Counter:
     import memory_writers
 
     found: Counter = Counter()
+    changing = set(memory_writers.MUTATING) | set(memory_writers.WITHOUT_ACTING)
 
     def walk(node, fn):
         for child in ast.iter_child_nodes(node):
             inner = fn
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 inner = child.name if not fn else f"{fn}.{child.name}"
-            if isinstance(child, ast.Attribute) and child.attr in memory_writers.MUTATING:
+            if isinstance(child, ast.Attribute) and child.attr in changing:
                 found[(rel, fn, child.attr)] += 1
             elif isinstance(child, ast.Call) and getattr(child.func, "id", "") == "getattr" and len(child.args) >= 2 \
-                    and isinstance(child.args[1], ast.Constant) and child.args[1].value in memory_writers.MUTATING:
+                    and isinstance(child.args[1], ast.Constant) and child.args[1].value in changing:
                 found[(rel, fn, child.args[1].value)] += 1
             walk(child, inner)
 
@@ -452,13 +610,21 @@ def a_read(svc):
 
 def test_every_call_of_a_mutating_method_is_in_the_table_with_who_is_acting():
     """``tests/memory_writers.py`` is the whole list: a new call site, or one more call in a listed function, fails until it is
-    added WITH who is acting there. Control run: a second ``svc.ingest`` planted in ``routers/notes._store_note_memory`` fails."""
+    added WITH who is acting there. The methods are the DERIVED set (``test_the_mutating_methods_are_derived_from_the_service``):
+    the calls of those that take ``acting`` are ``SITES``, of the rest ``WITHOUT_ACTING_SITES``. Control runs: a second
+    ``svc.ingest`` planted in ``routers/notes._store_note_memory`` fails; round 4, a second ``svc.tick_access`` planted in
+    ``memory_digest._rem_reinforce_pass._write`` fails (``tick_access`` was in no list before)."""
     import memory_writers
 
     found: Counter = Counter()
     for rel, path in _modules():
         found.update(mutating_calls(path.read_text("utf-8"), rel))
-    assert service_calls(found, memory_writers.NOT_THE_SERVICE) == {k: n for k, (_who, n) in memory_writers.SITES.items()}
+    calls = service_calls(found, memory_writers.NOT_THE_SERVICE)
+    assert {k: n for k, n in calls.items() if k[2] in memory_writers.MUTATING} == {
+        k: n for k, (_who, n) in memory_writers.SITES.items()}
+    assert {k: n for k, n in calls.items() if k[2] in memory_writers.WITHOUT_ACTING} == {
+        k: n for k, (_who, n) in memory_writers.WITHOUT_ACTING_SITES.items()}
+    assert {who for who, _n in memory_writers.WITHOUT_ACTING_SITES.values()} <= {"member", "automatic"}
     assert {who for who, _n in memory_writers.SITES.values()} == {"member", "automatic", "passes_on"}
     assert len(memory_writers.MUTATING) == 13
 
@@ -467,8 +633,95 @@ def test_every_call_of_a_mutating_method_is_in_the_table_with_who_is_acting():
 PASS_ON_HELPERS = {"_ingest_or_supersede", "retire_twins"}       # told who is acting by their own callers
 
 
+#: where a coroutine can wait (and a forget can land meanwhile): an ``await``, an ``async with`` (its lock), an ``async for``
+SUSPENDS = (ast.Await, ast.AsyncWith, ast.AsyncFor)
+
+
 def _first_await(fn) -> int:
-    return min((n.lineno for n in ast.walk(fn) if isinstance(n, ast.Await)), default=10 ** 9)
+    return min((n.lineno for n in ast.walk(fn) if isinstance(n, SUSPENDS)), default=10 ** 9)
+
+
+def _always_leaves(stmts) -> bool:
+    """Does this block always leave the function (its last statement a ``return`` / ``raise``, or an ``if`` whose every branch
+    does)?"""
+    if not stmts:
+        return False
+    last = stmts[-1]
+    if isinstance(last, (ast.Return, ast.Raise)):
+        return True
+    return isinstance(last, ast.If) and _always_leaves(last.body) and _always_leaves(last.orelse)
+
+
+def _blocks(fn):
+    """Every statement block in ``fn`` (bodies, ``else`` / ``elif`` branches, ``except`` handlers, ``match`` cases)."""
+    for n in ast.walk(fn):
+        for field in ("body", "orelse"):
+            block = getattr(n, field, None)
+            if isinstance(block, list) and block and isinstance(block[0], ast.stmt):
+                yield block
+        for h in getattr(n, "handlers", None) or ():
+            yield h.body
+        for case in getattr(n, "cases", None) or ():
+            yield case.body
+
+
+def _inside(block, node) -> bool:
+    return (block[0].lineno, block[0].col_offset) <= (node.lineno, node.col_offset) \
+        and (node.end_lineno, node.end_col_offset) <= (block[-1].end_lineno, block[-1].end_col_offset)
+
+
+def _waits_before(fn, call) -> bool:
+    """Can ``fn`` have waited before it reaches ``call``? An ``await`` that ends before the call starts, or an ``async with`` /
+    ``async for`` whose header ends before it (the call in the body runs after the lock or the iterator was awaited) - unless
+    that wait is in a block the call is not in and that block always leaves the function (``if x: await a(); return ...``
+    before the call: the call is never reached after that wait). Any other branching counts as a wait on the way (a wait in a
+    loop's earlier turn, in an ``if`` that falls through, ...): over-reporting, never under. A call inside a ``finally`` is
+    reached after anything, so nothing is excused for it."""
+    at = (call.lineno, call.col_offset)
+    finals = [n.finalbody for n in ast.walk(fn) if getattr(n, "finalbody", None)]
+    in_finally = any(_inside(b, call) for b in finals)
+    leaving = [b for b in _blocks(fn) if _always_leaves(b) and not _inside(b, call)
+               and not any(isinstance(m, (ast.Break, ast.Continue)) for s in b for m in ast.walk(s))] if not in_finally else []
+    # an exception in the wait can be caught (``try`` / ``except``) or swallowed (a ``with``) and fall through to the call: a
+    # wait inside either is never excused - unless every handler of that ``try`` leaves the function, or the ``try`` / ``with``
+    # also holds the call (the exception then skips the call too) and no loop around it can come back to the call
+    loops = [n for n in ast.walk(fn) if isinstance(n, (ast.For, ast.AsyncFor, ast.While))]
+
+    def holds_the_call_once(n) -> bool:
+        return _inside(n.body, call) and not any(_inside(lp.body, n) for lp in loops)
+
+    catching = [n for n in ast.walk(fn)
+                if (isinstance(n, (ast.Try, getattr(ast, "TryStar", ast.Try))) and not all(_always_leaves(h.body) for h in n.handlers) and not holds_the_call_once(n))
+                or (isinstance(n, (ast.With, ast.AsyncWith)) and not holds_the_call_once(n))]
+
+    def excused(wait) -> bool:
+        return any(_inside(b, wait) for b in leaving) and not any(_inside(c.body, wait) for c in catching)
+
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Await):
+            end = (n.end_lineno, n.end_col_offset)
+        elif isinstance(n, ast.AsyncWith):
+            end = (n.items[-1].context_expr.end_lineno, n.items[-1].context_expr.end_col_offset)
+        elif isinstance(n, ast.AsyncFor):
+            end = (n.iter.end_lineno, n.iter.end_col_offset)
+        else:
+            continue
+        if end <= at and not excused(n):
+            return True
+    return False
+
+
+def _callers(tree, name: str) -> list:
+    """``(function, call)`` for every call of ``name`` (``name(...)`` or ``self.name(...)``) inside a function of the module."""
+    out = []
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for call in ast.walk(fn):
+                if isinstance(call, ast.Call) and (getattr(call.func, "id", None) == name or (
+                        isinstance(call.func, ast.Attribute) and call.func.attr == name
+                        and getattr(call.func.value, "id", "") in ("self", "cls"))):
+                    out.append((fn, call))
+    return out
 
 
 def _member_built_first(fn) -> bool:
@@ -492,12 +745,51 @@ def _member_built_first(fn) -> bool:
     return False
 
 
+def _waiting_callers(tree, fn, seen=frozenset()) -> list:
+    """Why ``fn`` can be reached after a wait: every function of the module that calls it after it could have waited (``X waits
+    before calling fn``), up the caller chain (a caller that did not wait is followed to ITS callers)."""
+    out = []
+    for c, call in _callers(tree, fn.name):
+        if c is fn or c.name in seen:
+            continue
+        if _waits_before(c, call):
+            out.append(f"{c.name} waits before calling {fn.name}")
+        else:
+            out += _waiting_callers(tree, c, seen | {fn.name})
+    return out
+
+
+def _member_late(tree, fn, seen=frozenset()) -> list:
+    """Why the member ``fn`` passes on may be taken after something on the way to it WAITED, along the caller chain in the
+    module; ``[]`` when it is in time. In time: ``fn`` builds it first (``_member_built_first``) and nothing that calls it in
+    the module waited before the call; or ``fn`` is a PRIVATE helper handed it (a keyword-only ``acting``, so a call that does
+    not hand it fails) and every call of ``fn`` in the module passes ``acting=acting`` from a function for which the same holds.
+    Callers in OTHER modules are not followed: a private helper has none, and a public entry point builds it itself (that its
+    own caller in another module did not wait first is not checked here)."""
+    if fn.name in seen:
+        return [f"{fn.name} calls itself"]
+    if _member_built_first(fn):
+        return _waiting_callers(tree, fn)
+    callers = [c for c in _callers(tree, fn.name) if c[0] is not fn]
+    if not (callers and fn.name.startswith("_") and "acting" in {a.arg for a in fn.args.kwonlyargs}):
+        return [f"{fn.name} does not build the member before it first waits"]
+    out = []
+    for c, call in callers:
+        if any(k.arg == "acting" and ast.unparse(k.value) == "acting" for k in call.keywords):
+            out += _member_late(tree, c, seen | {fn.name})
+        else:
+            out.append(f"{c.name} does not hand acting= to {fn.name}")
+    return out
+
+
 def acting_faults(source: str, rel: str) -> list:
     """Every mutating call (and every call of a pass-on helper) that does not say who is acting the way its row of
-    ``tests/memory_writers.py`` says it must."""
+    ``tests/memory_writers.py`` says it must. A member site's member must be taken before anything waited, along the caller
+    chain in the module (``_member_late``): a lock awaited by the caller before the helper builds it is a fault."""
     import memory_writers
 
     faults: list = []
+    tree = ast.parse(source)
 
     def walk(node, fn, outer):
         for child in ast.iter_child_nodes(node):
@@ -521,22 +813,49 @@ def acting_faults(source: str, rel: str) -> list:
                         faults.append((*site, "an automatic writer must pass memory_actor.AUTOMATIC"))
                     elif who == "passes_on" and not (given == "acting" and "acting" in params):
                         faults.append((*site, "must hand on its own acting parameter"))
-                    elif who == "member" and not (given == "acting" and outer is not None and _member_built_first(outer)):
+                    elif who == "member" and given != "acting":
                         faults.append((*site, "a member site must pass the member built before the first await"))
+                    elif who == "member":
+                        late = sorted(set(_member_late(tree, outer))) if outer is not None else ["no function"]
+                        if late:
+                            faults.append((*site, "the member is taken after a wait: " + "; ".join(late)))
             walk(child, inner, top)
 
-    walk(ast.parse(source), "", None)
+    walk(tree, "", None)
     return faults
+
+
+#: round 4: member sites whose member is taken after a CALLER in the module waited (the caller-chain rule, ``_member_late``),
+#: found when the rule was added and NOT changed by #2706 (which fixed the curator's own lock wait in add / edit / forget):
+#: each is reported for its own fix. EXACT fault, reason included: a new late site, or a new waiting caller of a listed one,
+#: is a different fault and fails; a listed one that is fixed fails too until it is taken off.
+LATE_MEMBER_KNOWN = [
+    ('correction_apply.py', 'apply_date_correction', 'review', 'the member is taken after a wait: maybe_apply waits before calling apply_date_correction'),
+    ('correction_apply.py', 'apply_pet_correction', 'review', 'the member is taken after a wait: maybe_apply waits before calling apply_pet_correction'),
+    ('correction_apply.py', 'apply_pet_correction', 'ingest', 'the member is taken after a wait: maybe_apply waits before calling apply_pet_correction'),
+    ('correction_apply.py', 'apply_row_correction', 'review', 'the member is taken after a wait: maybe_fix_recent waits before calling apply_row_correction; maybe_swap waits before calling apply_row_correction'),
+    ('hold_the_fact.py', '_apply_update', 'review', 'the member is taken after a wait: _confirm waits before calling _update; plan waits before calling _update'),
+    ('intent_router.py', '_execute_forget_last._reject', 'review', 'the member is taken after a wait: execute_intent waits before calling _execute_forget_last'),
+    ('intent_router.py', '_execute_forget_last', 'erase_rows', 'the member is taken after a wait: execute_intent waits before calling _execute_forget_last'),
+    ('mcp_server.py', '_execute_tool', 'ingest', 'the member is taken after a wait: handle_tool waits before calling _execute_tool'),
+    ('mcp_server.py', '_execute_tool', 'review', 'the member is taken after a wait: handle_tool waits before calling _execute_tool'),
+    ('mcp_server.py', '_execute_tool', 'review', 'the member is taken after a wait: handle_tool waits before calling _execute_tool'),
+    ('memory_curation.py', '_add_locked', 'ingest', 'the member is taken after a wait: by_voice waits before calling add'),
+    ('memory_curation.py', '_edit_locked', 'review', 'the member is taken after a wait: decide_held waits before calling edit'),
+    ('skybridge_service.py', '_store_skybridge_memory_fact', 'ingest', 'the member is taken after a wait: _resolve_people_remember_fact waits before calling _store_skybridge_memory_fact'),
+    ('zoe_agent.py', '_mempalace_add', 'ingest', 'the member is taken after a wait: _voice_capability_shortcut waits before calling _dispatch_tool; run_zoe_agent waits before calling _chat_capability_shortcut; run_zoe_agent waits before calling _dispatch_tool; run_zoe_agent_streaming waits before calling _chat_capability_shortcut; run_zoe_agent_streaming waits before calling _dispatch_tool'),
+]
 
 
 def test_every_call_site_says_who_is_acting_and_a_member_is_built_before_anything_is_awaited():
     """Control runs: ``acting=acting`` dropped from ``memory_disputes.resolve``'s review; a digest ingest passing a member;
     ``memory_space.forget_row`` building ``memory_actor.Member(user_id)`` itself (no stamps of the moment); ``retire_twins``
-    called without ``acting=``: each fails this."""
+    called without ``acting=``: each fails this. Round 4 (#2706): the curator's member built back inside the ``async with``
+    of the member lock in ``memory_curation.add`` fails this (a new late fault)."""
     faults = []
     for rel, path in _modules():
         faults += acting_faults(path.read_text("utf-8"), rel)
-    assert faults == []
+    assert Counter(faults) == Counter(LATE_MEMBER_KNOWN)
 
 
 def test_the_scan_sees_each_way_a_site_can_fail_to_say_who_is_acting(monkeypatch):
@@ -683,6 +1002,93 @@ def test_every_call_outside_the_service_says_it_is_automatic():
         faults[key] -= n
     assert {k: n for k, n in faults.items() if n} == {}
     assert callers - {k[0] for k in SCRIPTS_NOT_THE_SERVICE} == SERVICE_CALLERS_OUTSIDE
+
+
+def test_a_member_taken_after_a_wait_in_the_caller_chain_is_a_fault(monkeypatch):
+    """Round 4 (#2706): the member must be taken before anything on the way to the write WAITED, along the caller chain, not
+    only in the function that makes the call. Planted: the old curation shape (the entry point awaits the member lock, then the
+    locked helper builds the member: each function alone looks right); a helper handed the member by a caller that awaited a
+    read before building it; a member built inside the ``async with`` of its own function; a caller in the chain that awaits
+    before calling an entry point that builds it. The fixed curation shape (built, then the lock, then handed on) and a helper
+    called before anything waited are clean. A wait in a branch that always returns is not on the way (``_b1`` clean), unless
+    an exception in it can be caught and fall through (``_b2``) or a ``continue`` can come back round (``_b3``). Controls run
+    (each fails this test): ``SUSPENDS`` back to ``ast.Await`` only (``in_the_lock`` and the old curation shape pass);
+    ``_member_late`` replaced by ``_member_built_first`` of the calling function alone (``_old_locked`` passes, ``_new_locked``
+    fails); no wait excused (``_b1`` faults); no ``try`` counted as catching (``_b2`` passes); ``break`` / ``continue`` not
+    checked (``_b3`` passes)."""
+    import memory_writers
+
+    sites = {("m.py", f, "ingest"): ("member", 1) for f in ("_old_locked", "_new_locked", "_late_locked", "in_the_lock",
+                                                            "deep", "_early", "_b1", "_b2", "_b3")}
+    monkeypatch.setattr(memory_writers, "SITES", sites)
+    src = '''
+async def old(svc, user_id):
+    async with lock(user_id):
+        return await _old_locked(svc, user_id)
+async def _old_locked(svc, user_id):
+    acting = memory_actor.member(user_id)
+    await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+async def new(svc, user_id):
+    acting = memory_actor.member(user_id)
+    async with lock(user_id):
+        return await _new_locked(svc, user_id, acting=acting)
+async def _new_locked(svc, user_id, *, acting):
+    await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+async def late(svc, user_id):
+    await read(user_id)
+    acting = memory_actor.member(user_id)
+    return await _late_locked(svc, user_id, acting=acting)
+async def _late_locked(svc, user_id, *, acting):
+    await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+async def in_the_lock(svc, user_id):
+    async with lock(user_id):
+        acting = memory_actor.member(user_id)
+        await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+async def outer(svc, user_id):
+    await read(user_id)
+    return await deep(svc, user_id)
+async def deep(svc, user_id):
+    acting = memory_actor.member(user_id)
+    await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+async def first(svc, user_id):
+    out = await _early(svc, user_id)
+    await read(user_id)
+    return out
+async def _early(svc, user_id):
+    acting = memory_actor.member(user_id)
+    await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+async def branch_returns(svc, user_id, x):
+    if x:
+        await read(user_id)
+        return None
+    return await _b1(svc, user_id)
+async def caught(svc, user_id, x):
+    try:
+        if x:
+            await read(user_id)
+            return None
+    except Exception:
+        pass
+    return await _b2(svc, user_id)
+async def looped(svc, user_id, xs):
+    for x in xs:
+        if x:
+            await read(user_id)
+            if x > 1:
+                continue
+            return None
+        await _b3(svc, user_id)
+async def _b1(svc, user_id):
+    acting = memory_actor.member(user_id)
+    await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+async def _b2(svc, user_id):
+    acting = memory_actor.member(user_id)
+    await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+async def _b3(svc, user_id):
+    acting = memory_actor.member(user_id)
+    await svc.ingest("x", user_id=user_id, source="s", acting=acting)
+'''
+    assert sorted(f[1] for f in acting_faults(src, "m.py")) == ["_b2", "_b3", "_late_locked", "_old_locked", "deep", "in_the_lock"]
 
 
 def test_the_outside_scan_sees_a_missing_or_wrong_actor():

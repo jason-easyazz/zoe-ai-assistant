@@ -361,12 +361,13 @@ def _member_lock(member_id: str) -> asyncio.Lock:
 
 
 async def add(db, curator: Account, member_id: str, text: str, category: str, *, via: str = "desktop", svc: Any = None) -> dict:
+    acting = memory_actor.member(curator.user_id)      # the erase stamps of when the curator asked, not of when the lock came free
     async with _member_lock(member_id):
-        return await _add_locked(db, curator, member_id, text, category, via=via, svc=svc)
+        return await _add_locked(db, curator, member_id, text, category, via=via, svc=svc, acting=acting)
 
 
-async def _add_locked(db, curator: Account, member_id: str, text: str, category: str, *, via: str, svc: Any) -> dict:
-    acting = memory_actor.member(curator.user_id)
+async def _add_locked(db, curator: Account, member_id: str, text: str, category: str, *, via: str, svc: Any,
+                      acting: memory_actor.Member) -> dict:
     pol = await policy(db, curator, member_id)
     clean, cat, sensitive = check_text(text, category, pol)
     await refuse_forgotten(curator, pol.member, clean, _store_text(clean, pol.member))
@@ -383,12 +384,13 @@ async def _add_locked(db, curator: Account, member_id: str, text: str, category:
 
 
 async def edit(db, curator: Account, member_id: str, row_id: str, text: str, *, via: str = "desktop", svc: Any = None) -> dict:
-    async with _member_lock(member_id):
-        return await _edit_locked(db, curator, member_id, row_id, text, via=via, svc=svc)
-
-
-async def _edit_locked(db, curator: Account, member_id: str, row_id: str, text: str, *, via: str, svc: Any) -> dict:
     acting = memory_actor.member(curator.user_id)
+    async with _member_lock(member_id):
+        return await _edit_locked(db, curator, member_id, row_id, text, via=via, svc=svc, acting=acting)
+
+
+async def _edit_locked(db, curator: Account, member_id: str, row_id: str, text: str, *, via: str, svc: Any,
+                       acting: memory_actor.Member) -> dict:
     pol = await policy(db, curator, member_id)
     old = await _one(pol, row_id, svc)
     clean, cat, sensitive = check_text(text, str((old.metadata or dict()).get("curated_category") or "other"), pol)
@@ -439,12 +441,12 @@ async def forget(db, curator: Account, member_id: str, row_id: str, *, svc: Any 
     A retry after a failed erase finds the already-rejected row and finishes the erase. Holds the member's lock (the one ``edit`` and
     the opt-out take) across lookup, rejection and erase: a concurrent edit cannot supersede the row between them, which would leave
     the approved successor standing behind a ``forgotten`` answer."""
-    async with _member_lock(member_id):
-        await _forget_locked(db, curator, member_id, row_id, svc=svc)
-
-
-async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, svc: Any) -> None:
     acting = memory_actor.member(curator.user_id)
+    async with _member_lock(member_id):
+        await _forget_locked(db, curator, member_id, row_id, svc=svc, acting=acting)
+
+
+async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, svc: Any, acting: memory_actor.Member) -> None:
     from memory_service import physical_erase_enabled
 
     svc = _svc(svc)
