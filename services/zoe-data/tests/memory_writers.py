@@ -6,7 +6,27 @@ already decided (a note, a journal entry, a contact), an eraser finishing an ear
 ``passes_on``: the function was TOLD who is acting (its own ``acting`` parameter: the service calling itself, or a helper
 shared by member and automatic callers) and hands that on; its callers are the ones that choose.
 """
+#: the methods that change the rows AND take who is acting (``acting=``). With ``WITHOUT_ACTING`` this is exactly what the rule in
+#: ``tests/test_memory_one_writer.changing_methods`` derives from the service's code (a test holds the two equal).
 MUTATING = ("ingest", "delete_user", "sweep_soft_archive", "review", "supersede_by", "retire_with_quote", "set_curated_standing", "archive_duplicate", "flag_challenged", "record_candidate", "erase_rows", "relink_entity", "archive_by_entity")
+
+#: the methods that also change the rows (by the same rule) but take no ``acting``: counters on rows (``tick_access``: access
+#: count and last read; ``tick_consolidation``), a superseded row put back (``restore_superseded``, called only by a maintenance
+#: script), the index rebuilt from its stored rows (``compact_index``) and the residue scrub (``scrub_residue``). Their calls are
+#: in ``WITHOUT_ACTING_SITES``.
+WITHOUT_ACTING = ("tick_access", "tick_consolidation", "restore_superseded", "compact_index", "scrub_residue")
+#: the reads whose ONLY write is the access tick of the rows they returned (``MemoryService._schedule_tick`` starting
+#: ``tick_access``): their calls are not listed (the tick is the service's own bookkeeping and ``search`` is also every regex's
+#: method name); the derivation checks that cutting the tick leaves them writing nothing.
+READS_THAT_TICK = ("load_for_prompt", "search")
+
+#: every call of a WITHOUT_ACTING method: (module, function, method) -> (who is asking for it, how many calls)
+WITHOUT_ACTING_SITES = {
+    ('memory_digest.py', '_rem_reinforce_pass._write', 'tick_access'): ('automatic', 1),
+    ('memory_service.py', '_schedule_tick', 'tick_access'): ('automatic', 1),   # the access tick of a read
+    ('routers/memories.py', 'memory_compact_index_endpoint', 'compact_index'): ('automatic', 1),   # internal token, operator
+    ('routers/memories.py', 'memory_scrub_residue_endpoint', 'scrub_residue'): ('automatic', 1),   # internal token, operator
+}
 
 #: (module, function, method) -> (who is acting, how many calls)
 SITES = {
