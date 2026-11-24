@@ -2347,7 +2347,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             params += [start_at, end_at]
         updates.append("updated_at=NOW()")
         params.extend([eid, user_id])
-        await db.execute(f"UPDATE events SET {','.join(updates)} WHERE id=? AND user_id=?", params)
+        from calendar_service import tool_update_event_record
+
+        await tool_update_event_record(db, event_id=eid, user_id=user_id, updates=updates, params=params)
         await _notify_ui("calendar", "event_updated", {"id": eid})
         return {"id": eid, "status": "updated"}
 
@@ -2360,10 +2362,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
         if is_repeating_row(row):
             return {"error": REPEATING_DELETE_LINE, "status": "repeating"}    # never the whole series from one occurrence
-        from calendar_service import now_text
+        from calendar_service import now_text, tool_delete_event_record
 
-        await db.execute("UPDATE events SET deleted=1, deleted_at=?, updated_at=NOW() WHERE id=? AND user_id=?",
-                         (now_text(), eid, user_id))
+        await tool_delete_event_record(db, event_id=eid, user_id=user_id, deleted_at=now_text())
         await _notify_ui("calendar", "event_deleted", {"id": eid})
         return {"id": eid, "status": "deleted"}
 

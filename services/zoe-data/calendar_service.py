@@ -160,6 +160,95 @@ async def create_event_record(
     }
 
 
+# ── The rest of the ONE DOOR: every other write of ``events`` (each caller's own statement, kept exactly) ─────────────────────────
+# ``events`` / ``event_attendees`` / ``event_alarms`` are written HERE and nowhere else by anything a person does. Each entry
+# point had its own statement (different placeholders, different WHERE, different column order); unifying them is a separate,
+# later decision, so each is kept statement for statement under the name of the entry point it serves. Callers keep their own
+# lookups, refusals, notices and commits. Outside this door on purpose: the read-only feed's reconcile (``calendar_feed``, through
+# ``connected_accounts.upsert_row``: the system's own, nobody acting) and the erasers (``calendar_forget``, ``memory_forget_cascade``).
+async def update_event_record(db, *, event_id: str, updates: list, params: list):
+    """The screen's edit (``PUT /api/calendar/events/{id}``): the SET fragments and values the route built, by id."""
+    return await db.execute(f"UPDATE events SET {', '.join(updates)} WHERE id = ?", params)
+
+
+async def delete_event_record(db, *, event_id: str, deleted_at: str):
+    """The screen's soft delete (``deleted_at`` is the sync tombstone's time)."""
+    return await db.execute("UPDATE events SET deleted = 1, deleted_at = ?, updated_at = NOW() WHERE id = ?", [deleted_at, event_id])
+
+
+async def tool_update_event_record(db, *, event_id: str, user_id: str, updates: list, params: list):
+    """The brain's ``calendar_update_event`` tool: the member's OWN event only (the statement says so)."""
+    return await db.execute(f"UPDATE events SET {','.join(updates)} WHERE id=? AND user_id=?", params)
+
+
+async def tool_delete_event_record(db, *, event_id: str, user_id: str, deleted_at: str):
+    """The brain's ``calendar_delete_event`` tool: the member's OWN event only."""
+    return await db.execute("UPDATE events SET deleted=1, deleted_at=?, updated_at=NOW() WHERE id=? AND user_id=?",
+                            (deleted_at, event_id, user_id))
+
+
+async def spoken_create_event_record(db, *, event_id: str, user_id: str, title: str, start_date: str, start_time, end_date: str,
+                                     end_time, all_day: int):
+    """The spoken "add ... to my calendar" (Skybridge, a raw asyncpg handle): a family event of the speaker's."""
+    return await db.execute(
+        """
+        INSERT INTO events (
+            id, user_id, title, start_date, start_time, end_date, end_time,
+            duration, category, location, all_day, recurring, metadata,
+            visibility, deleted
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)
+        """,
+        event_id,
+        user_id,
+        title,
+        start_date,
+        start_time,
+        end_date,
+        end_time,
+        None,
+        "general",
+        None,
+        all_day,
+        None,
+        None,
+        "family",
+    )
+
+
+async def spoken_move_event_record(db, *, event_id: str, user_id: str, start_time):
+    """The spoken "move ... to 3pm" (Skybridge): the speaker's OWN event only."""
+    return await db.execute(
+        # Giving an all-day event a time makes it a timed event — clear all_day so
+        # the row can't be both (renderers/spoken summaries would disagree).
+        "UPDATE events SET start_time = $1, all_day = 0, updated_at = NOW() WHERE id = $2 AND user_id = $3 AND deleted = 0",
+        start_time,
+        event_id,
+        user_id,
+    )
+
+
+async def spoken_delete_event_record(db, *, event_id: str, user_id: str, deleted_at: str):
+    """The spoken "delete ... from my calendar" (Skybridge): the speaker's OWN event only."""
+    return await db.execute(
+        "UPDATE events SET deleted = 1, updated_at = NOW(), deleted_at = $3 WHERE id = $1 AND user_id = $2 AND deleted = 0",
+        event_id,
+        user_id,
+        deleted_at,
+    )
+
+
+async def suggested_create_event_record(conn, *, event_id: str, user_id: str, title: str, start_date: str):
+    """An accepted calendar suggestion (inside the suggestion's own transaction): a family all-day-less event on that day."""
+    return await conn.execute(
+        """INSERT INTO events (id, user_id, title, start_date, category, all_day, visibility, deleted)
+               VALUES ($1, $2, $3, $4, 'general', 0, 'family', 0)""",
+        event_id,
+        user_id,
+        title,
+        start_date,
+    )
+
+
 # ── The 0052 calendar data model (docs/architecture/calendar-data-model.md) ──────────────────────────────
 #
 # Vocabulary follows RFC 5545 (iCalendar) / RFC 8984 (JSCalendar), lower-cased. Stored visibility keeps the
