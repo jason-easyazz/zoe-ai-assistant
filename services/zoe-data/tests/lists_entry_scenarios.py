@@ -12,7 +12,9 @@ door work added, so it runs unchanged on ``main``.
 
 The store answers a read from its rows, filtered by the plain ``column = value`` terms of the statement's WHERE (a term it
 cannot read does not filter), and APPLIES each write whose every term it can read; a write it cannot read is named in
-``unapplied``. Invented ids and words only. The clock is frozen; ids made at random are masked.
+``unapplied``. Invented ids and words only. The clock is frozen; each id made at random is replaced by ``<id-n>``, ``n`` counted
+in order of first appearance across the scenario's whole record (its log, then ``unapplied``, then the rows), so two new rows
+stay told apart and a row naming another new row (an item's ``list_id``) keeps naming THAT row.
 """
 from __future__ import annotations
 
@@ -41,14 +43,26 @@ class _Clock(datetime):
 
 
 def _mask(value):
-    if isinstance(value, str):
-        return _UUID.sub("<id>", value)
+    """JSON-ready: datetimes as ISO text. Random ids are left as they are here and numbered once over the whole record
+    (``_number``), so the same id gets the same placeholder in a statement, a reply and a row."""
     if isinstance(value, dict):
         return {_mask(k): _mask(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_mask(v) for v in value]
     if isinstance(value, datetime):
         return value.isoformat()
+    return value
+
+
+def _number(value, ids: dict):
+    """``value`` with each UUID replaced by ``<id-n>``: the same id always the same ``n``, a new id the next ``n`` (``ids`` holds
+    the numbering so far, in order of first appearance)."""
+    if isinstance(value, str):
+        return _UUID.sub(lambda m: ids.setdefault(m[0], f"<id-{len(ids) + 1}>"), value)
+    if isinstance(value, dict):
+        return {_number(k, ids): _number(v, ids) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_number(v, ids) for v in value]
     return value
 
 
@@ -377,8 +391,12 @@ class Store:
                 out[name] = row.get(bare) if re.fullmatch(r"\w+", bare) else row.get(name)
         return Row(out)
 
-    def record_rows(self) -> dict:
-        return {t: sorted((_mask(dict(r)) for r in self.tables[t].values()), key=lambda r: json.dumps(r, sort_keys=True, default=str))
+    def record_rows(self, ids: dict | None = None) -> dict:
+        """Every list and item row, ids numbered with ``ids`` (in table order, so a new id first seen here is numbered the same
+        on every run) and only then sorted."""
+        ids = {} if ids is None else ids
+        return {t: sorted((_number(_mask(dict(r)), ids) for r in self.tables[t].values()),
+                          key=lambda r: json.dumps(r, sort_keys=True, default=str))
                 for t in ("lists", "list_items")}
 
 
@@ -594,7 +612,10 @@ def run_one(name: str) -> dict:
                 obj.update(value)
             else:
                 setattr(obj, attr, value)
-    return json.loads(json.dumps({"log": log, "rows": store.record_rows(), "unapplied": store.unapplied}, default=str))
+    ids: dict = {}
+    log = _number(json.loads(json.dumps(log, default=str)), ids)
+    unapplied = _number(store.unapplied, ids)
+    return json.loads(json.dumps({"log": log, "rows": store.record_rows(ids), "unapplied": unapplied}, default=str))
 
 
 def run_all() -> dict:

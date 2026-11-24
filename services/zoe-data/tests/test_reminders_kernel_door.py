@@ -226,12 +226,31 @@ async def test_any_other_flag_value_makes_no_kernel_call_no_thread_and_the_same_
 # ---- allowed: ids only, reported after the write ----------------------------------------------------------------------------------
 @pytest.mark.parametrize("name", sorted(DOORS))
 @pytest.mark.asyncio
-async def test_every_door_asks_once_with_ids_only_and_reports_done(door, caplog, name):
-    """Control run: with the ``_gate`` call removed from one door (delete), its case fails at ``len(asks) == 1``."""
+async def test_every_door_asks_once_with_ids_only_and_reports_done(door, caplog, monkeypatch, name):
+    """``done`` is handed to the kernel AFTER the door's last write (and after its own commit, where the door commits): the
+    moment production calls ``os_shadow.report_door`` is marked in the statement record itself, so the ORDER is asserted,
+    not only that a report and a write both exist (review round 4).
+
+    Controls run: with the ``_gate`` call removed from one door (delete), its case fails at ``len(asks) == 1``;
+    ``kernel_door.report(asked, "done")`` put before ``async with _reported(asked)`` in ``delete_reminder_record`` and in
+    ``tool_update_reminder_record`` (done told before the write) -> those two cases fail at the order assertion."""
     verb = DOORS[name][0]
     db = DB(owner=KID, visibility="family")
+    send = os_shadow.report_door
+
+    def marked(area, ask, outcome, stamps=None):
+        db.sql.append(f"REPORT {outcome}")                     # where in the statement record production told the kernel
+        return send(area, ask, outcome, stamps)
+
+    monkeypatch.setattr(os_shadow, "report_door", marked)
     with caplog.at_level(logging.INFO, logger="os_shadow"):
         await DOORS[name][1](db, KID)
+    assert db.sql.count("REPORT done") == 1 and not [s for s in db.sql if s.startswith("REPORT") and s != "REPORT done"]
+    told = db.sql.index("REPORT done")
+    db.sql.remove("REPORT done")
+    assert db.writes and all(i < told for i, s in enumerate(db.sql) if s in db.writes), (told, db.sql)
+    assert ("COMMIT" in db.sql) is (not name.startswith("tool_"))         # the brain tools leave the commit to their caller
+    assert all(i < told for i, s in enumerate(db.sql) if s == "COMMIT"), (told, db.sql)
     (ask,) = door.ops("door_ask")
     assert set(ask) == {"area", "verb", "person", "target", "owner", "visibility", "stamps"}
     # the edit and delete tools touch only the member's OWN row and never read it: its visibility is not told (the owner may anyway)
