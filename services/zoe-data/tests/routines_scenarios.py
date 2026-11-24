@@ -6,7 +6,12 @@ Each scenario starts from an empty, migrated SQLite store at a fixed household m
 forget cascade's own routines step, and records, AFTER EVERY CALL: what it returned or refused, the four tables, every column of
 every row (read from the schema; ``["rows", "unchanged"]`` when no row moved since the last record), what the routines modules
 logged, and after a spoken turn the walk state (the step named, the last said change, the lines listed). A value one call writes
-is therefore pinned even when a later call overwrites it. Nothing is masked: the clocks are FROZEN (the household clock at
+is therefore pinned even when a later call overwrites it. DURING every call, in the order they happen, every SQL statement the
+store sends (its text, whitespace-folded, and its parameters), every ``commit`` and where each transaction begins and ends (and
+the advisory locks taken inside it): the connection behaves as production's ``db_pool.AsyncpgCompat`` does (a statement outside
+a transaction commits itself, ``commit`` is a no-op, ``transaction`` is one real transaction), so a statement whose text changes,
+or a commit moved, added or dropped, changes the record even when the reply and the rows do not. Nothing is masked: the clocks
+are FROZEN (the household clock at
 ``routines_support.THU``, the walk clock ``_mono``) and the ids the store mints come from a fixed sequence (each id is then
 replaced by a label in order of first appearance, so a record does not depend on how many ids a run mints before it).
 
@@ -21,6 +26,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import tempfile
 import types
 import uuid
@@ -74,6 +80,52 @@ def _ids():
     return types.SimpleNamespace(uuid4=uuid4, UUID=uuid.UUID)
 
 
+class _Connection:
+    """The store's connection over the scenario's SQLite file, shaped and behaving as production's ``db_pool.AsyncpgCompat`` (what
+    ``db_compat.get_compat_db`` yields on Postgres): ``execute`` is awaitable and an async context manager, a statement outside a
+    transaction commits itself (asyncpg autocommits), ``commit`` does nothing, ``transaction`` is ONE real transaction (rolled back
+    when the block raises) and the per-member advisory lock statement the store sends inside it runs (as a recorded no-op).
+    Everything is appended to the scenario's log as it happens: ``["sql", text, params]``, ``["commit"]``, ``["begin"]``,
+    ``["end"]`` / ``["rollback"]``."""
+
+    def __init__(self, path: str, log: list):
+        self.conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self.conn.create_function("hashtextextended", 2, lambda text, seed: int(hashlib.sha256(str(text).encode()).hexdigest()[:8], 16))
+        self.conn.create_function("pg_advisory_xact_lock", 1, lambda key: None)
+        self.log = log
+
+    def execute(self, sql, params=()):
+        from db_pool import _Cursor, _ExecResult
+
+        self.log.append(["sql", " ".join(str(sql).split()), list(params or ())])
+
+        async def _run():
+            await asyncio.sleep(0)
+            cur = self.conn.execute(sql, tuple(params or ()))
+            return _Cursor(cur.fetchall(), rowcount=cur.rowcount)
+        return _ExecResult(_run())
+
+    async def commit(self) -> None:
+        self.log.append(["commit"])
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        self.log.append(["begin"])
+        self.conn.execute("BEGIN")
+        try:
+            yield
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            self.log.append(["rollback"])
+            raise
+        self.conn.execute("COMMIT")
+        self.log.append(["end"])
+
+    def q(self, sql, params=()):
+        """A read for the record itself (the tables, the schema): not logged."""
+        return [tuple(r) for r in self.conn.execute(sql, params).fetchall()]
+
+
 class World:
     def __init__(self, directory: str):
         import db_compat
@@ -86,7 +138,7 @@ class World:
         self.rs, self.log = rs, []
         path = os.path.join(directory, "zoe.db")
         support.migrate(path)
-        self.db = support.Sqlite(path)
+        self.db = _Connection(path, self.log)
 
         @contextlib.asynccontextmanager
         async def fake_db():

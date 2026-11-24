@@ -93,9 +93,39 @@ def test_any_other_flag_value_does_exactly_what_main_did(door, monkeypatch, valu
     assert door.ops("door_ask") == []
 
 
+#: the scenarios whose statements run in ANOTHER ORDER with the door on, and only because of it: ``add_one_off`` makes the day
+#: (``_ensure_day``) after its own checks and the kernel's answer instead of before them, so nothing is made for a refused ask.
+#: Same transaction, same statements, same parameters, same commits; only the order of the statements between two other events.
+DOOR_REORDERS = {"one_off_subject", "one_off_family_any_member", "one_off_child_subject_of_adults_routine", "tier_chat_walk",
+                 "tier_one_off_and_timed_reminder", "tier_leaving_one_line", "tier_leaving_several_lines"}
+
+
+def _runs(record: list) -> list:
+    """The record with each run of consecutive SQL statements as a sorted list: every other entry (a commit, a transaction's
+    begin and end, a reply, the rows) keeps its place."""
+    out: list = []
+    for e in record:
+        if e[0] == "sql":
+            if not (out and isinstance(out[-1], tuple)):
+                out.append(())
+            out[-1] = tuple(sorted(out[-1] + (json.dumps(e),)))
+        else:
+            out.append(e)
+    return out
+
+
 def test_with_the_door_on_and_allowing_every_entry_point_does_exactly_what_main_did(door):
-    """Control run: with ``add_step`` writing its row twice when asked, the add-step scenarios gain a row."""
-    assert scenarios.run_all() == ON_MAIN
+    """Every scenario's record with the door on is main's: the replies, the rows after every call, the logs, every commit and
+    transaction boundary, every SQL statement with its parameters. The ONE difference is the order of the statements inside
+    ``add_one_off`` (``DOOR_REORDERS``, exact). Controls run: with ``add_step`` writing its row twice when asked, the add-step
+    scenarios gain a row; (round 4) with the door-on ``_ensure_day`` moved back before the checks, the reordered set is empty
+    and the exact-set assertion fails; with ``add_one_off``'s ``SELECT closed_at`` read sent twice with the door on, its
+    statements differ and this fails."""
+    here = scenarios.run_all()
+    assert set(here) == set(ON_MAIN)
+    assert {n for n in here if here[n] != ON_MAIN[n]} == DOOR_REORDERS
+    for name in here:
+        assert _runs(here[name]) == _runs(ON_MAIN[name]), name
     assert {a["verb"] for a in door.ops("door_ask")} == {"routine.create", "routine.edit", "routine.edit_given", "routine.tick",
                                                         "routine.skip", "routine.snooze", "routine.undo"}
 

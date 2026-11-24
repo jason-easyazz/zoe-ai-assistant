@@ -1,11 +1,13 @@
 """Routines: ONE module writes the four tables, and nothing its entry points do has changed against ``main``.
 
-``tests/fixtures/routines_as_on_main.json`` is the record of ``main`` (c1a350458), made by running
+``tests/fixtures/routines_as_on_main.json`` is the record of ``main`` (75046b677), made by running
 ``tests/routines_scenarios.py`` against an export of that commit under its own test configuration (HOME and every store path
 in a scratch directory), never by this branch's code: for each scenario, AFTER EVERY CALL, what it returned or refused, the four
 tables (every column of every row, read from the schema, not listed), what the routines modules logged, and after a spoken
-turn the walk state. The clocks and the minted ids are frozen, nothing is masked. The same scenarios run here and must give the
-same record.
+turn the walk state; and DURING every call, in order, every SQL statement the store sent with its parameters, every
+``commit``, and where each transaction began and ended (the connection behaves as production's ``db_pool.AsyncpgCompat``).
+The clocks and the minted ids are frozen (each id then a distinct label in order of first appearance), nothing else is
+masked. The same scenarios run here and must give the same record.
 
 Covered (49): creating a routine (own, for a child by an adult, family, a guest, a family routine with a medicine line);
 adding a template step and a one-off as the subject, another member, the child subject of a routine an adult set up, the adult
@@ -33,7 +35,10 @@ the spoken undo's reply -> ``tier_start_done_then_spoken_undo``; the unverified 
 ``tier_medicine_spoken``; chat no longer counted as verified -> ``tier_chat_walk``; ``turn_begins`` never closing the walk ->
 ``tier_walk_ends_when_another_tier_answers``; the walk entry's clock moved (in-memory state only, same reply) and a store log
 event renamed -> ``tier_walk``; the shadow claim inverted for "start" -> ``tier_shadow_writes_nothing``; a guest shown a personal
-routine -> ``readers_by_viewer``.
+routine -> ``readers_by_viewer``. Round 4 (the statements and the commits; each leaves every reply and every row as it was):
+one statement's text changed (``SELECT snapshot_at FROM routine_days WHERE id = ?`` gains ``AND 1 = 1``) -> ``tap_done_subject``;
+the guarded write's commit moved EARLIER (before the write runs) -> ``create_own``; the guarded erase's commit moved LATER (after
+its transaction has ended) -> ``erase_entity_own_routines_only``; the guarded write's commit dropped -> ``create_own``.
 """
 from __future__ import annotations
 
@@ -183,6 +188,25 @@ def test_the_record_shows_the_rows_and_the_refusals_not_only_the_replies(here):
     assert _replies(here["tier_walk"])[:2] == ["Next: brush teeth.", "Ticked. Next: pack the bag."]
     kept = _end(here["forget_user"], "routines")
     assert kept and all(row[1:].count(scenarios.ALEX) == 0 for row in kept)                 # Riley's stays, with no trace of Alex
+
+
+def test_the_record_holds_every_statement_and_commit_in_order(here):
+    """A call's record is the SQL it sent, with its parameters, the commit and the transaction around it, in the order they ran,
+    BEFORE what it returned: a tap is its transaction, the advisory lock, the one ``UPDATE`` with every value it writes, the
+    commit, the end. Controls: see the module docstring (round 4); each fails ``test_every_routines_entry_point_...``."""
+    tap = here["tap_done_subject"]
+    at = next(i for i, e in enumerate(tap) if e[0] == "tap")
+    before = tap[:at]
+    last_begin = max(i for i, e in enumerate(before) if e == ["begin"])
+    shape = [e[0] if e[0] != "sql" else e[1].split()[0] for e in before[last_begin:]]
+    assert shape == ["begin", "SELECT", "UPDATE", "commit", "end", "logged"], shape
+    update = before[last_begin + 2]
+    assert update[1].startswith("UPDATE routine_day_steps SET state = ?") and update[2][0] == "done" and "<id1>:2026-11-12:<id2>" in update[2]
+    for name, record in here.items():
+        kinds = [e[0] for e in record]
+        assert kinds.count("begin") == kinds.count("end") + kinds.count("rollback"), name
+        assert "sql" in kinds or name in ("create_guest_refused", "create_family_medicine_refused"), name   # refused before any read
+    assert sum(e[0] == "commit" for r in here.values() for e in r) >= 100
 
 
 def test_rows_are_recorded_after_every_call_not_only_at_the_end(here):
