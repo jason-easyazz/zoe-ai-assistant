@@ -209,14 +209,52 @@ async def test_a_refused_change_is_not_made_and_the_caller_is_told_why(door, rea
     assert len(door.ops("door_report")) == reports
 
 
-def test_the_callers_that_would_hide_a_refusal_say_it_instead():
-    """The spoken remember and the brain's three memory tools catch every error as an outage; each now answers a kernel
-    refusal with its sentence. Control run: the ``except kernel_door.Refused`` dropped from the spoken remember fails this."""
-    spoken = (SVC / "intent_router.py").read_text("utf-8")
-    i = spoken.index('source="brain_tool"')
-    assert "except kernel_door.Refused as exc:" in spoken[i:i + 1500] and "return exc.line()" in spoken[i:i + 1600]
-    tools = (SVC / "mcp_server.py").read_text("utf-8")
-    assert tools.count('except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_MEMORY=kernel)') == 3
+@pytest.mark.asyncio
+async def test_the_callers_that_would_hide_a_refusal_say_it_instead(door, monkeypatch):
+    """The spoken remember (``intent_router.execute_intent``, the brain's ``memory_store``) and the brain's memory tools
+    (``mcp_server.handle_tool``: ``memory_add``, ``memory_review``, ``memory_forget``) catch every error as an outage; each
+    change the kernel refuses now answers with the refusal's sentence and writes nothing. Run for real, with the kernel
+    refusing: only the database handle and the role lookup of the tool entry are fakes. ``memory_forget`` is a forget: never
+    asked, so the kernel's "no" does not stop it (the row is hidden, as with the door off). Controls run (``controls.py``;
+    each fails this test): the spoken remember answering "Saved." on a refusal; ``memory_add`` returning ``{"status":
+    "added"}`` on a refusal; ``memory_review`` swallowing the refusal (``pass``: the tool then reports an error that is not
+    the sentence)."""
+    import contextlib
+
+    import intent_router
+    import mcp_server
+
+    @contextlib.asynccontextmanager
+    async def no_db():
+        yield None
+
+    async def role(_db, _uid, _hint, _source):
+        return "member"
+
+    monkeypatch.setattr(mcp_server, "_pg_get_db", no_db)
+    monkeypatch.setattr(mcp_server, "_lookup_actor_role", role)
+    w = scenarios.World()
+    row = await w.said(OLD)
+    held = await w.call("ingest", OTHER, user_id=ANN, source="digest", confidence=0.6, status="pending")
+    before, writes = _rows(w), len(w.log)
+    door.door = "refuse:not_owner"
+    sentence = memory_door.MemoryRefused("not_owner").line()
+    assert sentence
+
+    said = await intent_router.execute_intent(intent_router.Intent("memory_store", {"text": NEW}), ANN)
+    assert said == sentence
+
+    async def tool(name, **args):
+        return json.loads(await mcp_server.handle_tool(name, {"_user_id": ANN, **args}))
+
+    assert await tool("memory_add", content=NEW) == {"error": sentence, "status": "refused"}
+    assert await tool("memory_review", memory_id=row.id, decision="edit", edits=NEW) == {"error": sentence, "status": "refused"}
+    assert await tool("memory_review", memory_id=held.id, decision="approve") == {"error": sentence, "status": "refused"}
+    assert _rows(w) == before and len(w.log) == writes                       # nothing written, nothing audited
+    assert [a["verb"] for a in _asks(door)][-4:] == ["memory.remember", "memory.remember", "memory.correct", "memory.approve"]
+
+    gone = await tool("memory_forget", memory_id=held.id)                   # a forget is made whatever the kernel says
+    assert gone.get("status") == "rejected" and w.col.rows[held.id][1]["status"] == "rejected", gone
 
 
 @pytest.mark.parametrize("how, reason", [("slow", "timeout"), ("gone", "unreachable"), ("old_kernel", "old_kernel")])
@@ -456,30 +494,66 @@ async def test_the_acting_member_is_who_asked_not_whose_row_it_is(door):
 
 # ---- the panel -------------------------------------------------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_nobody_identified_asks_as_the_panel_and_a_voice_verified_member_asks_as_themself(door, monkeypatch):
-    """How a verified panel session is represented today (``voice_session.py``): one per panel, in process memory, holding the
-    member id; while it is open the turn's user IS that member, and with it closed the turn's user is ``guest``. So the door
-    needs no panel rule of its own: the member's id asks as the member, and ``guest`` asks as the panel and is refused (the
-    store then drops a guest's fact exactly as it always did). Control run: with ``_ids`` sending ``guest`` as a person the
-    panel assertion fails."""
-    import voice_session
-
-    monkeypatch.setenv("ZOE_VOICE_SESSION", "1")
-    voice_session.reset()
-    voice_session._open_or_renew("panel-kitchen", ANN, voice_session._clock(), "ok")
-    speaker = voice_session.active_member("panel-kitchen")
-    assert speaker == ANN
+async def test_nobody_identified_asks_as_the_panel_and_a_member_asks_as_themself(door):
+    """At the door: a member's id asks as the member; ``guest`` (the turn's user with no voice session open, see the next
+    test for the turn path that decides it) asks as the panel and is refused (the store then drops a guest's fact exactly as
+    it always did). Control run: with ``_ids`` sending ``guest`` as a person the panel assertion fails."""
     w = scenarios.World()
-    assert await w.said(OLD, user=speaker) is not None                                   # inside the session: the member
-    voice_session._close("panel-kitchen", "unverified_voice")
-    assert voice_session.active_member("panel-kitchen") is None
+    assert await w.said(OLD, user=ANN) is not None
     door.door = "refuse:not_owner"
     assert await w.svc.ingest(NEW, user_id="guest", source="voice_fact", acting=memory_actor.member("guest")) is None
     asks = _asks(door)
     assert asks[0]["person"] == ANN and "via" not in asks[0]
     assert asks[1].get("via") == "panel" and asks[1]["person"] == "panel" and "owner" not in asks[1]       # the word, never an id
     assert len(w.col.rows) == 1
-    voice_session.reset()
+
+
+@pytest.mark.asyncio
+async def test_a_panel_voice_turn_reaches_the_memory_door_as_the_member_only_while_their_voice_session_is_open(door, monkeypatch):
+    """Round 4: the REAL turn path, end to end. ``routers.voice_tts.voice_command`` (its real identity block: the speaker
+    claim, its threshold and consent gate, ``voice_session``) -> the real conversation tiers (``fast_tiers.resolve``) -> the
+    real spoken "remember that ..." (``ask_to_remember``) -> the real ``MemoryService.ingest`` and its door -> the kernel (a
+    fake socket). Faked only at the edges: the panel-session table, the chat save, TTS, Skybridge, the brain lanes (the
+    ``test_voice_identity_freshness`` wiring) and the store's collection (``memory_scenarios.World``).
+
+    Ann's verified voice opens the panel's voice session: her "remember that ..." reaches the door asking as HER. The session
+    then lapses (its TTL passes); the next "remember that ..." on the same panel is a guest's: nothing reaches the door as
+    her and nothing is stored as hers. Controls run (``controls.py``; each fails this test): ``voice_command`` handing the
+    turn's user on without the accepted claim (``effective_user`` from ``None`` instead of ``identified_user_id``: a verified
+    session's turn is a guest's); ``voice_command`` taking the member of the panel's voice session as it stood before this
+    turn, lapsed or not (a closed session attributed to the member)."""
+    import sys
+
+    import fast_tiers
+    import intent_router
+    import test_voice_identity_freshness as vf
+
+    seen = vf._wire(monkeypatch, vf._PanelStore(), skybridge_handles=False)
+    monkeypatch.setitem(sys.modules, "fast_tiers", fast_tiers)              # the real tiers and router: only the edges are fakes
+    monkeypatch.setitem(sys.modules, "intent_router", intent_router)
+
+    async def consented(_uid, *_model):
+        return True
+
+    monkeypatch.setattr(vf.voice_tts, "_voice_claim_consented", consented)
+    vs = vf._voice_session_on(monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(vs, "_clock", lambda: clock[0])
+    w = scenarios.World()
+
+    await vf._turn(seen, "remember that the bins go out on Tuesday", **vf._voice_claim(ANN))
+    assert vs.active_member(vf.PANEL) == ANN
+    asks = _wait(door, 1, "memory.remember")
+    assert [(a["person"], a.get("owner")) for a in asks] == [(ANN, ANN)] and "via" not in asks[0]
+    assert [meta.get("user_id") for _doc, meta in w.col.rows.values()] == [ANN]
+
+    clock[0] += vs.ttl_s() + 1                                               # the session lapses with nobody speaking
+    await vf._turn(seen, "remember that my dog is called Teddy")
+    assert vs.active_member(vf.PANEL) is None
+    time.sleep(0.3)                                                           # an ask, had there been one, has landed
+    assert [a["person"] for a in _asks(door)] == [ANN]                        # nothing more asked: not as her, not at all
+    assert [meta.get("user_id") for _doc, meta in w.col.rows.values()] == [ANN]
+    assert not any("Teddy" in doc for doc, _meta in w.col.rows.values())
 
 
 # ---- reports -----------------------------------------------------------------------------------------------------------------------
