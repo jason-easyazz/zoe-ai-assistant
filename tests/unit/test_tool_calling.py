@@ -78,7 +78,9 @@ def test_chat_router_maps_core_brain_tool_sentinels_to_ag_ui_events():
     [
         "Add bread to shopping list",
         "What tools do you have?",
-        "Turn on the living room light",
+        # No device command here: this test posts to the RUNNING app when one is up, and a spoken
+        # "turn on ..." would switch a real light.
+        "What is on my shopping list?",
     ],
 )
 async def test_chat_tool_calling_returns_structured_response(message):
