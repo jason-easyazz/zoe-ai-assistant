@@ -116,11 +116,13 @@ def here():
 
 #: every (module, function, writing function of ``routines_store``) the CODE holds that the scenarios RUN through that function
 #: is found by the spy; these are the ones they do NOT run, each with why. Exact, so the list cannot grow unseen. Every tier path
-#: and the forget cascade's routines step ARE run (each through its own code); only the whole-member erase is not.
+#: and the forget cascade's routines step ARE run (each through its own code); only the whole-member erase and the card's API are not.
 _DELETE_USER = ("the whole-member erase (MemoryService.delete_user) runs some thirty stores before this one and needs the memory "
                 "service's own database: its routines call is the store's forget_user, recorded by the forget_user scenario")
+_CARD_API = "the card's API, new with this PR: main has no such route to compare with; pinned by tests/test_routines_card_api.py"
 SITES_NOT_RUN = {
     ("memory_service.py", "delete_user", "forget_user"): _DELETE_USER,
+    ("routers/routines.py", "act", "act_tapped"): _CARD_API, ("routers/routines.py", "today", "day_copy"): _CARD_API,
 }
 
 

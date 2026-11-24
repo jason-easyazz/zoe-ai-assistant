@@ -50,6 +50,7 @@ ALLOWLIST = {
     ("routers/proactive.py", "claim_pending_endpoint"): "the unguessable pending id IS the capability (push-notification tap)",
     ("routers/proactive.py", "run_selector_synthetic"): "X-Internal-Token checked in the body; synthetic harness ids only",
     ("routers/memories.py", "forget_synthetic_user"): "X-Internal-Token checked in the body; synthetic harness ids only",
+    ("routers/routines.py", "act"): "the routine card on the household panel: its ``_who`` dependency reads the session; with none the caller is the UNVERIFIED household actor (no member), and routines_store applies the visibility and tap rules to that actor",
 }
 
 

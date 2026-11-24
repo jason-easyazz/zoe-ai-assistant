@@ -40,6 +40,8 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
 | 1a | the tables (alembic `0081_routines.py`), routines + steps in `services/zoe-data/routines_store.py`, both erasers, forget reach | 11 (for the four tables that exist) |
 | 1b | the day: lazy day copies, one-off lines, the walk (`note_named`) and the said / tapped ticks | 3 (store-level tick rule) |
 | 2 | the conversation tier `services/zoe-data/routines_tier.py`, registered in `fast_tiers._resolve_tiers` | 1, 2, 3, 4 (voice side), 9 |
+| 3 | the card API `services/zoe-data/routers/routines.py` (`GET /api/routines/today`, `POST /api/routines/steps/act`): a member's own session or the bare panel; no panel UI and no voice-pushed private card yet | 3 (tap side), 10 (Riley ticks her routine) |
+| - | the Zoe OS kernel door for routines (`ZOE_OS_ROUTINES=kernel`): [zoe-os-routines-door.md](zoe-os-routines-door.md). With it on, a child does not change a routine set up for them | 10 (only a parent changes it) |
 
 ### PR 1 (1a + 1b) - the store
 
