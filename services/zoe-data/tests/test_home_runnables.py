@@ -435,6 +435,9 @@ MORE_HA = {
     **_ui_scene(6, {"cover.blind": {"state": "closed", "current_tilt_position": "{{ 100 }}"}}),
     **_ui_scene(7, {"light.hall": {"state": "on"}, "lock.front_door": {"state": "unlocked"}}),      # the state names no lock
     **_ui_scene(8, {"cover.blind": {"state": "closed", "current_position": 0, "current_tilt_position": 0.0}}),
+    **_ui_scene(9, {"cover.garage_door": {"state": "closed", "attributes": {"current_position": 100}}}),      # nested position
+    **_ui_scene(10, {"cover.blind": {"state": "closed", "attributes": {"more": [{"tilt": "{{ 100 }}"}]}}}),   # nested, unreadable
+    **_ui_scene(11, {"cover.blind": {"state": "closed", "attributes": {"current_position": 0, "current_tilt_position": 0}}}),
 }
 HA_FAILS = {"config/scene/config/1700000000801": 404, "config/scene/config/1700000000802": 408,
             "config/scene/config/1700000000803": 500, "config/scene/config/1700000000804": 401}
@@ -444,7 +447,7 @@ SELECTOR_SCRIPTS = ["script.area_in_data", "script.area_in_service_data", "scrip
 FAILED_SCENE_READS = ["scene.config_gone", "scene.config_slow", "scene.config_errors", "scene.config_denied", "scene.s1", "scene.s2",
                       "scene.s3", "scene.s4"]
 #: read in full, and what they do opens something
-READ_AS_OPENING = ["script.lock_in_the_second_block", "script.toggles_a_lock", "scene.s5", "scene.s6", "scene.s7"]
+READ_AS_OPENING = ["script.lock_in_the_second_block", "script.toggles_a_lock", "scene.s5", "scene.s6", "scene.s7", "scene.s9", "scene.s10"]
 #: everything else an action can hold that reaches further than the entities it names
 OTHER_UNREADABLE = ["script.two_names_for_a_call", "script.whole_data_templated", "script.whole_target_templated",
                     "script.service_template", "script.data_template", "script.templated_in_a_list", "script.entity_all",
@@ -507,12 +510,14 @@ async def test_what_else_a_definition_can_hold_is_read_or_is_unreadable(real_bri
     scene's state does not list. Old reader: ``lock_in_the_second_block``, ``two_names_for_a_call``, ``names_no_entity``,
     ``radio_command``, ``own_service``, ``generic_on_an_unknown_domain``, ``restarts``, ``scene.s5`` and ``scene.s6`` read safe.
     Controls run: with ``service_data``'s ids dropped from ``_script_calls`` the second-block lock reads safe; with
-    ``_scene_state`` ignoring positions ``scene.s5`` reads safe; with ``_reads_as_its_targets`` answering True the radio
+    ``_scene_state`` ignoring positions ``scene.s5`` reads safe; with ``_moves`` looking only at the top level (the old
+    code) ``scene.s9`` and ``scene.s10`` read safe; with ``_reads_as_its_targets`` answering True the radio
     command reads safe."""
     assert await _verdicts(real_bridge, READ_AS_OPENING) == dict.fromkeys(READ_AS_OPENING, (True, "opens"))
     got = await _verdicts(real_bridge, OTHER_UNREADABLE)
     assert {e: v for e, (_, v) in got.items()} == dict.fromkeys(OTHER_UNREADABLE, "unreadable")
     assert await _verdicts(real_bridge, ["scene.s8"]) == {"scene.s8": (True, "safe")}       # a closed blind at position 0
+    assert await _verdicts(real_bridge, ["scene.s11"]) == {"scene.s11": (True, "safe")}     # ... and with the zeros nested
     for entity in READ_AS_OPENING + OTHER_UNREADABLE:
         with pytest.raises(HTTPException):
             await _route(KID, entity)

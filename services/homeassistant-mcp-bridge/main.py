@@ -614,16 +614,32 @@ def _names_a_payload(value: Any, depth: int = 0) -> bool:
     return isinstance(value, list) and any(_names_a_payload(v, depth + 1) for v in value)
 
 
+def _moves(value: Any, depth: int = 0) -> bool:
+    """Does this member carry a position or a tilt, at ANY depth (a stored ``attributes`` block included), that is not a
+    plain 0? Anything this cannot read (too deep, a template, a string, a list under such a key) counts as moving."""
+    if depth > 8:
+        return True
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            name = str(key).lower()
+            if "position" in name or "tilt" in name:
+                if isinstance(inner, bool) or not isinstance(inner, (int, float)) or inner != 0:
+                    return True
+            elif _moves(inner, depth + 1):
+                return True
+        return False
+    return isinstance(value, list) and any(_moves(v, depth + 1) for v in value)
+
+
 def _scene_state(target: Any) -> str:
-    """The state a scene sets one member to, or "" when it is not known. A member given a position that is not 0 is not
-    known to be closed whatever its ``state`` says: Home Assistant moves a cover or a valve to the position. A member whose
+    """The state a scene sets one member to, or "" when it is not known. A member given a position or tilt that is not 0, anywhere in what
+    is stored for it, is not known to be closed whatever its ``state`` says: Home Assistant moves a cover or a valve to the position. A member whose
     stored attributes carry a payload (``_PAYLOAD_KEYS``) is not a state at all: the scene is unreadable."""
     if isinstance(target, dict):
         if _names_a_payload(target):
             raise _Unreadable("payload")
-        for key, value in target.items():
-            if "position" in str(key).lower() and (isinstance(value, bool) or not isinstance(value, (int, float)) or value != 0):
-                return ""
+        if _moves(target):
+            return ""
         target = target.get("state")
     state = target.strip().lower() if isinstance(target, str) else ""
     return state if state in _SCENE_STATES else ""      # a fixed vocabulary only: a member's state can be free text

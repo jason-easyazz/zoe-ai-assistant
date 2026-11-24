@@ -409,6 +409,12 @@ UNLISTED = [("remote.den", "send_command", {"command": "womble"}), ("remote.den"
             ("button.gate", "press", None), ("input_button.gate", "press", None), ("vacuum.den", "send_command", None),
             ("media_player.den", "play_media", {"media_content_id": "http://relay.invalid/open"}),
             ("media_player.den", "play_media", {"media_content_id": " //relay.invalid/open"}),
+            ("media_player.den", "play_media", {"media_content_id": "http:relay.invalid/open"}),      # a scheme with no slashes
+            ("media_player.den", "play_media", {"media_content_id": "HTTP:relay.invalid/open"}),
+            ("media_player.den", "play_media", {"media_content_id": "  https:relay.invalid/open"}),
+            ("media_player.den", "play_media", {"media_content_id": "mailto:womble@relay.invalid"}),
+            ("media_player.den", "play_media", {"media_content_id": "tel:0000"}),
+            ("media_player.den", "play_media", {"media_content_id": "data:text/plain,womble"}),
             ("media_player.den", "play_media", {"media_content_id": ["womble"]}), ("media_player.den", "play_media", None),
             ("media_player.den", "play_media", {"media_content_id": "womble", "extra": {"x": 1}}),
             ("light.kitchen_lamp", "turn_on", {"payload": "womble"}), ("light.kitchen_lamp", "turn_on", {"nested": [{"URL ": "womble"}]}),
@@ -419,6 +425,8 @@ LISTED = [("remote.den", "turn_off", None), ("media_player.den", "media_pause", 
           ("media_player.den", "play_media", {"media_content_id": "womble song", "media_content_type": "music"}),
           ("media_player.den", "play_media", {"media_content_id": "media-source://womble/one"}),
           ("media_player.den", "play_media", {"media_content_id": "library://track/1"}), ("vacuum.den", "start", None),
+          ("media_player.den", "play_media", {"media_content_id": " Media-Source://womble/two"}),
+          ("media_player.den", "play_media", {"media_content_id": "womble song 12:30 mix"}),      # a colon after a space is not a scheme
           ("light.kitchen_lamp", "set_brightness", {"brightness_pct": 40}), ("light.kitchen_lamp", "set_color", {"rgb_color": [1, 2, 3]}),
           ("climate.den", "set_temperature", {"temperature": 21}), ("input_number.den_setpoint", "set_value", {"value": 20})]
 

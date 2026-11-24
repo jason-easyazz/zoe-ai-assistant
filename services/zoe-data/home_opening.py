@@ -88,7 +88,8 @@ BRIDGE_ACTIONS: Mapping[str, frozenset] = {"light": frozenset({"set_brightness",
 #: data keys that carry something to transmit, run or fetch: adult-only wherever they sit in a command's data
 PAYLOAD_KEYS = frozenset({"command", "payload", "url", "activity", "extra"})
 #: the only address schemes a directly sent ``play_media`` may name: Home Assistant resolves these itself, nothing is fetched
-LIBRARY_SCHEMES = ("media-source://", "library://")
+LIBRARY_SCHEME_NAMES = frozenset({"media-source", "library"})
+_URI_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 _PLAIN_ID = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 #: the caller of THIS turn (chat, voice, the brain's dispatch), noted where the turn's home-control verdict is recorded
 _TURN: contextvars.ContextVar[Optional[Mapping[str, Any]]] = contextvars.ContextVar("zoe_home_opening_turn", default=None)
@@ -137,7 +138,12 @@ def _plays_from_the_library(data: Any) -> bool:
     player told to play ``http://<a relay on the LAN>/open`` requests it). Here the data is in hand; in a script it is not,
     so a script's ``play_media`` is unreadable."""
     cid = data.get("media_content_id") if isinstance(data, Mapping) else None
-    return isinstance(cid, str) and ("//" not in cid or cid.strip().lower().startswith(LIBRARY_SCHEMES))
+    if not isinstance(cid, str):
+        return False
+    scheme = _URI_SCHEME.match(cid.strip())
+    if scheme:      # any scheme at all, with or without slashes (http:host/x, mailto:, data:): only the two library ones pass
+        return scheme.group(1).lower() in LIBRARY_SCHEME_NAMES
+    return "//" not in cid      # no scheme: words, unless it is a scheme-relative address
 
 
 def unlisted(entity_id: Any, action: Any, data: Any = None) -> bool:
