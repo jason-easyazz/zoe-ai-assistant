@@ -75,8 +75,9 @@ def stamps_now() -> dict | None:
     """The erase stamps as they are NOW, or None with every door off (``kernel_door.stamps_now``). Every ``*_reminder_record``
     function takes this as its FIRST statement, before anything it awaits (the row read that names the reminder's owner
     included). A caller of ``create_reminder_record`` TELLS the door who the reminder is for, so it takes its own as ITS first
-    statement and passes it as ``stamps_at`` (``tests/test_reminders_kernel_door.py`` scans every caller)."""
-    return kernel_door.stamps_now()
+    statement and passes it as ``stamps_at`` (``tests/test_reminders_kernel_door.py`` scans every caller). None unless the
+    REMINDERS door is on."""
+    return kernel_door.stamps_now("reminders")
 
 
 async def _gate(verb: str, *, actor: Mapping[str, object], reminder_id: str, owner: object, visibility: object,

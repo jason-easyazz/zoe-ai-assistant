@@ -32,19 +32,21 @@ ANN, BOB, HOUSE = "ann-0001", "bob-0002", "family-admin"
 WORD, DAY = "womble", "2099-06-16"
 NOW = "2099-06-01T04:00:00Z"
 TODAY = date(2099, 6, 10)
-# the two wall-clock stamps nothing here freezes: SQLite's CURRENT_TIMESTAMP (a column default) and a card's ``created_at``
-_STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+(?:Z|\+00:00)?")
+# the store's own clock, frozen: the ``events`` column defaults stand in for Postgres's ``DEFAULT now()`` with this fixed value,
+# so every stored stamp is a real value in the record (nothing is masked)
+STORE_NOW = "2099-06-01 04:00:00"
+CARD_NOW = "2099-06-01T04:00:00.123456+00:00"      # a card's own ``created_at`` (``datetime.now``), frozen the same way
 _UNDO: list = []
 
 BASE_DDL = (
     "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT DEFAULT 'user')",
     """CREATE TABLE people (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, relationship TEXT,
            email TEXT, visibility TEXT NOT NULL DEFAULT 'family', deleted INTEGER DEFAULT 0, updated_at TEXT)""",
-    """CREATE TABLE events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, start_date TEXT NOT NULL,
+    f"""CREATE TABLE events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL, start_date TEXT NOT NULL,
            start_time TEXT, end_date TEXT, end_time TEXT, duration INTEGER, category TEXT DEFAULT 'general',
            location TEXT, all_day INTEGER DEFAULT 0, recurring TEXT, metadata TEXT,
            visibility TEXT NOT NULL DEFAULT 'family', deleted INTEGER DEFAULT 0,
-           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+           created_at TEXT NOT NULL DEFAULT '{STORE_NOW}', updated_at TEXT NOT NULL DEFAULT '{STORE_NOW}',
            FOREIGN KEY (user_id) REFERENCES users(id))""",
 )
 SEED = f"""
@@ -73,20 +75,39 @@ def _restore() -> None:
         setattr(obj, name, value)
 
 
-def _mask(value):
-    if isinstance(value, str):
-        return _STAMP.sub("<stamp>", value)
+def _on_the_frozen_clock(build):
+    """A card stamps ``created_at`` from ``datetime.now`` it imports inside the call, so the clock is frozen for exactly that
+    (synchronous) call: ``datetime.datetime`` reads ``CARD_NOW`` while it runs and is put back before it returns."""
+    import datetime as dt
+
+    real = dt.datetime
+
+    class Frozen(real):
+        @classmethod
+        def now(cls, tz=None):
+            return real.fromisoformat(CARD_NOW).astimezone(tz) if tz else real.fromisoformat(CARD_NOW).replace(tzinfo=None)
+
+    def built(*a, **k):
+        dt.datetime = Frozen
+        try:
+            return build(*a, **k)
+        finally:
+            dt.datetime = real
+    return built
+
+
+def _plainly(value):
     if isinstance(value, dict):
-        return {str(k): _mask(v) for k, v in value.items()}
+        return {str(k): _plainly(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [_mask(v) for v in value]
+        return [_plainly(v) for v in value]
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return value
 
 
 def _plain(value):
-    return json.loads(json.dumps(_mask(value), default=str))
+    return json.loads(json.dumps(_plainly(value), default=str))
 
 
 def _migrate(root: Path, path: str) -> None:
@@ -217,6 +238,9 @@ class World:
         _set(skybridge_service, "_today", lambda: TODAY)
         _set(skybridge_service, "today_for_zoe_tz", lambda: TODAY)
         _set(intent_router, "_zoe_now", lambda: datetime(2099, 6, 10, 12, 0))
+        import card_service
+
+        _set(card_service.CardService, "build_card", _on_the_frozen_clock(card_service.CardService.build_card))
 
         @contextlib.asynccontextmanager
         async def pooled():
@@ -230,10 +254,9 @@ class World:
 
     def rows(self) -> dict:
         out = {}
-        for table, order, drop in (("events", "id", ()), ("event_attendees", "event_id, position", ("id",)),
-                                   ("event_alarms", "event_id", ("id",))):
+        for table, order in (("events", "id"), ("event_attendees", "event_id, position, id"), ("event_alarms", "event_id, id")):
             rows = [dict(r) for r in self.con.execute(f"SELECT * FROM {table} ORDER BY {order}")]
-            out[table] = [{k: v for k, v in r.items() if k not in drop and v is not None} for r in rows]
+            out[table] = [{k: v for k, v in r.items() if v is not None} for r in rows]       # every stored value, ids too
         return out
 
 

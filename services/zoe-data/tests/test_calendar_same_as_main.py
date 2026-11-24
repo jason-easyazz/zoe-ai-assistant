@@ -1,8 +1,9 @@
 """The calendar has ONE door, and nothing about what any entry point does has changed against ``main``.
 
-``tests/fixtures/calendar_as_on_main.json`` is the record of ``main`` (5533e3b08): for each entry point and action, every
+``tests/fixtures/calendar_as_on_main.json`` is the record of ``main`` (re-captured from b2bbe84ca): for each entry point and action, every
 statement with its values (reads too), every commit, hook, broadcast and receipt, the result or refusal, and the rows the three
-event tables hold afterwards. It was made by running ``tests/calendar_scenarios.py`` against an export of that commit
+event tables hold afterwards, every column including attendee and alarm ids and the stored stamps (the clock is frozen, ids
+are counted; nothing is masked). It was made by running ``tests/calendar_scenarios.py`` against an export of that commit
 (``git archive origin/main services/zoe-data``), never by this branch's own code. The same scenarios run here and must give the
 same record. This is also the "before the door" record the kernel-door tests compare flag-off behaviour with.
 
@@ -15,7 +16,8 @@ Negative controls run (each broke the code, saw the named scenario fail, restore
 ``delete_event_record`` -> ``rest_delete_own``; ``AND user_id=?`` dropped from ``tool_update_event_record`` ->
 ``tool_update``; ``all_day = 0`` dropped from ``spoken_move_event_record`` -> ``spoken_move_own``; ``'family'`` made
 ``'personal'`` in ``suggested_create_event_record`` -> ``suggestion_accepted``; an extra read added to
-``spoken_create_event_record`` -> ``spoken_create``.
+``spoken_create_event_record`` -> ``spoken_create``; the ``events.created_at`` default moved one second (the stored stamp the
+recorder once masked) -> every scenario that leaves a row.
 """
 from __future__ import annotations
 
