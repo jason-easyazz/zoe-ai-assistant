@@ -217,11 +217,17 @@ def test_a_member_taken_off_the_roster_but_kept_for_forgetting_changes_no_contac
     """Review of #2699: the contacts table was decided from the kernel's people map, which keeps a member taken off people.json
     while a record names them (so it can be forgotten), so such a member could still change another member's household
     contact and pass the owner check. Through the real daemon build: they are NOBODY at this door (every verb, every book,
-    their own included, the owner's adults-only switch on or off); a current member deals with what they left exactly as the
-    table says (household: create, edit, delete; private: ``not_owner``; the panel adds only); and they can still be forgotten.
+    their own included, the owner's adults-only switch on or off); and they can still be forgotten.
+
+    Review round 4: what they left is NOBODY'S to change (the shared door checks the owner against the current roster, for
+    every area alike): a current member's or the panel's create, edit or delete in the former member's book is refused,
+    household (``unknown_person``) or private (``not_owner``, the table's own answer), the switch on or off; back on the
+    roster their household contacts are the house's again.
 
     Controls run: ``former=True`` put on ``people_door.AREA`` -> the first ``unknown_person`` below is ``ok``;
-    ``k.door.roster = lambda: srv.roster`` removed from ``shadow_daemon.build`` -> the same."""
+    ``k.door.roster = lambda: srv.roster`` removed from ``shadow_daemon.build`` -> the same; (round 4) ``owner not in
+    acting`` put back to ``owner not in people`` in ``door.Door.ask`` -> a current member's household ask in the former
+    member's book is ``ok`` again."""
     daemon, k, srv, path = built
     write(path, [{"id": OWNER, "role": "adult"}, {"id": GONE, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}])
     assert _contact(srv, "contact.create", GONE, owner=GONE, visibility="private") == "ok"         # a record names them
@@ -236,14 +242,20 @@ def test_a_member_taken_off_the_roster_but_kept_for_forgetting_changes_no_contac
             for verb in VERBS:
                 assert _contact(srv, verb, GONE, owner=owner, visibility=visibility) == door.UNKNOWN_PERSON, (verb, owner, switch)
     monkeypatch.setattr(people_door, "HOUSEHOLD_CHANGE_ADULTS_ONLY", False)
-    for verb in VERBS:                                                     # what they left: the table's rows, as for any book
-        assert _contact(srv, verb, OWNER, owner=GONE) == "ok"
-        assert _contact(srv, verb, KID, owner=GONE) == "ok"                                        # today's rule: anyone in the house
-        assert _contact(srv, verb, OWNER, owner=GONE, visibility="private") == door.NOT_OWNER
-        assert _contact(srv, verb, KID, owner=GONE, visibility="private") == door.NOT_OWNER
-    assert _contact(srv, "contact.create", "kiosk-1", owner=GONE, via="panel") == "ok"
-    assert _contact(srv, "contact.edit", "kiosk-1", owner=GONE, via="panel") == door.NOT_OWNER
-    monkeypatch.setattr(people_door, "HOUSEHOLD_CHANGE_ADULTS_ONLY", True)
-    assert _contact(srv, "contact.edit", KID, owner=GONE) == door.ADULTS_ONLY                       # the switch applies there too
-    assert _contact(srv, "contact.edit", OWNER, owner=GONE) == "ok"
+    everyone = [{"id": OWNER, "role": "adult"}, {"id": GONE, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]}]
+    for switch in (False, True):                                           # what they left: nobody's to change
+        monkeypatch.setattr(people_door, "HOUSEHOLD_CHANGE_ADULTS_ONLY", switch)
+        for verb in VERBS:
+            assert _contact(srv, verb, OWNER, owner=GONE) == door.UNKNOWN_PERSON, (verb, switch)
+            assert _contact(srv, verb, KID, owner=GONE) in (door.UNKNOWN_PERSON, door.ADULTS_ONLY), (verb, switch)
+            assert _contact(srv, verb, OWNER, owner=GONE, visibility="private") == door.NOT_OWNER
+            assert _contact(srv, verb, KID, owner=GONE, visibility="private") == door.NOT_OWNER
+            assert _contact(srv, verb, "kiosk-1", owner=GONE, via="panel") in (door.UNKNOWN_PERSON, door.NOT_OWNER), verb
+    monkeypatch.setattr(people_door, "HOUSEHOLD_CHANGE_ADULTS_ONLY", False)
+    assert _contact(srv, "contact.create", "kiosk-1", owner=GONE, via="panel") == door.UNKNOWN_PERSON
+    assert _contact(srv, "contact.edit", KID, owner=GONE) == door.UNKNOWN_PERSON
+    write(path, everyone)                                                  # back on the roster: the house's again
+    assert _contact(srv, "contact.edit", KID, owner=GONE) == "ok" and _contact(srv, "contact.delete", OWNER, owner=GONE) == "ok"
+    write(path, [person for person in everyone if person["id"] != GONE])
+    assert _contact(srv, "contact.delete", OWNER, owner=GONE) == door.UNKNOWN_PERSON
     assert k.spine.forget(GONE, actor=GONE).count >= 1                                             # and they can still be forgotten
