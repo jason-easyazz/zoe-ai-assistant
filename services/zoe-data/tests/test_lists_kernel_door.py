@@ -82,6 +82,7 @@ def door(monkeypatch):
 #: what each door function did BEFORE it could ask the kernel: every statement WITH its values, every read with its arguments,
 #: and the list and item rows the writes left. Recorded by ``python3 tests/lists_door_scenarios.py`` run in an export of main at
 #: 2f003fce7 (lists behind one door, no kernel ask yet), never by this branch's code. Regenerate only for a deliberate change.
+#: Random ids are ``<id-n>``, numbered by first appearance within one call's record (the same id, the same ``n``).
 BEFORE_THE_DOOR = json.loads((Path(__file__).parent / "fixtures" / "lists_door_flag_off_statements.json").read_text())
 
 
