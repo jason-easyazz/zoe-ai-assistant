@@ -226,6 +226,103 @@ def test_a_command_nobody_is_acting_for_is_never_asked_or_told(door):
     assert door.calls == []
 
 
+def _count_door_work(monkeypatch) -> list:
+    """Every classifier and gate of ``action_doors`` wrapped to count its calls (each still does what it did)."""
+    seen: list = []
+    for name in ("home_verb", "home_secure", "music_verb", "before", "after"):
+        real = getattr(action_doors, name)
+        if asyncio.iscoroutinefunction(real):
+            async def wrap(*a, _real=real, _name=name, **k):
+                seen.append(_name)
+                return await _real(*a, **k)
+        else:
+            def wrap(*a, _real=real, _name=name, **k):
+                seen.append(_name)
+                return _real(*a, **k)
+        monkeypatch.setattr(action_doors, name, wrap)
+    return seen
+
+
+def _doors_off(monkeypatch, value) -> None:
+    def never(*a, **k):
+        raise AssertionError("the kernel was reached with the flag off")
+
+    for flag in FLAGS:
+        monkeypatch.delenv(flag, raising=False) if value is None else monkeypatch.setenv(flag, value)
+    for name in ("ask_door", "record_door", "report_door", "door_unchecked", "stamp_snapshot"):
+        monkeypatch.setattr(os_shadow, name, never)
+
+
+async def _main_send(base_url, path, body, *, timeout=None, client=None):
+    """Main's ``home_control.send`` (and actions-2's), verbatim: the outbound call a flag-off command must make."""
+    import httpx
+    import home_control
+
+    if path not in home_control.PATHS:
+        raise ValueError("not a Home Assistant command path")
+    if client is not None:
+        return await client.post(f"{base_url}{path}", json=body)
+    async with httpx.AsyncClient(timeout=timeout) as c:
+        return await c.post(f"{base_url}{path}", json=body)
+
+
+@pytest.mark.parametrize("value", [None, "off"])
+def test_with_the_home_door_off_a_command_is_never_classified_or_gated_and_is_sent_as_on_main(door, monkeypatch, value):
+    """``ZOE_OS_HOME`` off: ``home_control.send`` reads the flag and nothing else of the door: no verb, no target list, no
+    ``before`` / ``after``, for every home scenario (each entry point: the panel's route, Skybridge, the spoken resolver, the
+    brain's tool, the device helper, music through the house) and for a command whose own target is a LIST; and each sends
+    exactly main's call. Control run (``home_door_work_before_the_flag``): the classification and ``before`` moved back ahead of
+    the flag check (the order of 7534c3473) fails this with ``home_verb`` counted; the test also fails on 7534c3473 itself."""
+    import home_control
+
+    _doors_off(monkeypatch, value)
+    seen = _count_door_work(monkeypatch)
+    kernel_door.note_actor(ANN)                                 # a member IS acting: the flag alone decides
+    for name in scenarios.scenarios():
+        if name.startswith(("home_", "music_house_")):
+            assert scenarios.run_one(name) == ON_MAIN[name], name
+    targets = {"entity_id": ["light.hall_lamp", "switch.kettle_plug"]}
+
+    async def a_target_list(w):
+        import zoe_agent
+
+        return await zoe_agent._ha_control("light.kitchen_lamp", "turn_on", targets)
+
+    got = scenarios.run_one("a_target_list", a_target_list)
+    assert seen == []
+    monkeypatch.setattr(home_control, "send", _main_send)
+    assert got == scenarios.run_one("a_target_list", a_target_list)
+    assert [e[3] for e in _sent(got, "house")] == [{"entity_id": "light.kitchen_lamp", "action": "turn_on", "data": targets}]
+    assert door.calls == [] and door.connections == 0
+
+
+@pytest.mark.parametrize("value", [None, "off"])
+def test_with_the_music_door_off_a_command_is_never_classified_or_gated_and_is_sent_as_on_main(door, monkeypatch, value):
+    """``ZOE_OS_MUSIC`` off: ``music_service._ma_response`` reads the flag and nothing else of the door: the command is not
+    mapped, its arguments are not read, no ``before`` / ``after``, for every music scenario (the screen, Skybridge, the intent
+    executor) and for a command with arguments sent straight through ``_ma_ok``; and each sends exactly main's call. Control run
+    (``music_door_work_before_the_flag``): ``music_verb`` and ``before`` moved back ahead of the flag check (the order of
+    7534c3473) fails this; the test also fails on 7534c3473 itself."""
+    _doors_off(monkeypatch, value)
+    seen = _count_door_work(monkeypatch)
+    kernel_door.note_actor(ANN)
+    for name in scenarios.scenarios():
+        if name.startswith("music_") and not name.startswith("music_house_"):
+            assert scenarios.run_one(name) == ON_MAIN[name], name
+
+    async def with_arguments(w):
+        import music_service
+
+        return await music_service._ma_ok("players/cmd/volume_set", player_id="ply0001", volume_level=30)
+
+    got = scenarios.run_one("with_arguments", with_arguments)
+    assert seen == []
+    assert got[-1] == ["returned", True]
+    assert [e[3] for e in _sent(got, "players/cmd/volume_set")] == [
+        {"command": "players/cmd/volume_set", "args": {"player_id": "ply0001", "volume_level": 30}}]
+    assert door.calls == [] and door.connections == 0
+
+
 # ---- QUIET: sent first, told afterwards -------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("kernel", ["allow", "refuse:unknown_person", "slow", "gone"])
 @pytest.mark.parametrize("name, what, verb", [("music_screen_pause", "player_queues/pause", "music.stop"),
@@ -890,14 +987,19 @@ async def test_a_level_is_set_only_through_the_ask_and_never_while_the_kernel_ca
 
 # ---- structure --------------------------------------------------------------------------------------------------------------------
 def test_each_sender_asks_before_it_sends():
-    """In the two senders the door's ``before`` comes before the POST and ``after`` follows it. Control run: with ``before``
-    moved after the POST in ``home_control.send`` this fails."""
+    """In the two senders the door's ``before`` comes before the POST and ``after`` follows it (a POST inside the door-off
+    branch, ``if not os_shadow.area_on(...)``, is main's send and is not the door's). Control run: with ``before`` moved after
+    the POST in ``home_control.send`` this fails; control ``sender_ast_off_branch_exclusion_is_narrow`` (the door-off branch
+    written ``if os_shadow.area_on("home") is False:``) fails it too: only a ``not area_on`` branch is set aside."""
     for module, fn_name in (("home_control.py", "send"), ("music_service.py", "_ma_response")):
         tree = ast.parse((SVC / module).read_text("utf-8"))
         fn = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == fn_name)
         calls = [(n.lineno, getattr(n.func, "attr", "")) for n in ast.walk(fn) if isinstance(n, ast.Call)]
+        off = {n.lineno for i in ast.walk(fn) if isinstance(i, ast.If) and isinstance(i.test, ast.UnaryOp)
+               and isinstance(i.test.op, ast.Not) and "os_shadow.area_on(" in ast.unparse(i.test)
+               for b in i.body for n in ast.walk(b) if isinstance(n, ast.Call)}
         before = [ln for ln, name in calls if name == "before"]
-        posts = [ln for ln, name in calls if name == "post"]
+        posts = [ln for ln, name in calls if name == "post" and ln not in off]
         after = [ln for ln, name in calls if name == "after"]
         assert len(before) == 1 and posts and before[0] < min(posts) and after and max(after) > min(posts), module
 
