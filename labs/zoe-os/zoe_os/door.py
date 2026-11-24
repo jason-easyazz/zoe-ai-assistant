@@ -32,8 +32,9 @@ Scoped forgets (entity, topic, seqs) set no mark: an ask holds ids only, so it c
 
 The rules are household rules by ROLE (``capability.Person.role``), not a consent a skill collected: a thing belongs to its owner
 or to the house, whatever skill carried the request. The calling skill is still bounded by its manifest (it must name the verb).
-Not on the roster = unknown = refused (least access), for an actor AND for an owner: an owner the kernel does not know is not a
-person it could later forget, so their id is never written.
+Not on the roster = unknown = refused (least access), for an actor AND for an owner (``Area.former``: the CURRENT roster, for
+both; lists alone keeps former members). An owner the kernel does not know at all is not a person it could later forget, so
+their id is never written.
 """
 from __future__ import annotations
 
@@ -60,10 +61,13 @@ class Area:
     """One area of the door. ``decide(people, verb, actor, *, via, owner, visibility) -> Decision`` is its whole permission table;
     ``target`` is the record's key for the id of the thing changed, ``parts`` the key for the ids of its parts (None: it has none).
 
-    ``former``: who ACTS in this area. False (the default, every area but lists): only the CURRENT roster; a member taken off it
-    whom the kernel still holds a record for (kept so they can be forgotten) is nobody here, ``unknown_person``, exactly as a
-    stranger is. True: such a member still acts, with least access (``lists``: the rule main pinned for it before the other
-    areas existed, ``tests/test_roster_sync.py``; changing it is a household decision, not a refactor)."""
+    ``former``: who ACTS in this area, and whose things can be changed in it. False (the default, every area but lists): only
+    the CURRENT roster; a member taken off it whom the kernel still holds a record for (kept so they can be forgotten) is nobody
+    here, ``unknown_person``, exactly as a stranger is: they change nothing, and NOBODY changes what is theirs (an ask that
+    names them as the owner is refused, whoever asks). What they left is removed by FORGETTING them, which never asks this
+    door, or changed again once they are back on the roster. True: such a member still acts, with least access, and still
+    owns (``lists``: the rule main pinned for it before the other areas existed, ``tests/test_roster_sync.py``; changing it
+    is a household decision, not a refactor)."""
     name: str
     verbs: tuple
     decide: Callable
@@ -123,11 +127,14 @@ class Door:
             stale = any(self.spine.erased_after(m, stamps.get(m)) for m in (None if via == PANEL else person, owner) if m)
             known = via != PANEL and person in people and not stale
             manifest = self.enforcer.store.manifests.get(skill)
+            acting = self._acting(people, spec)
             verdict = Decision(False, NOT_IN_MANIFEST) if manifest is None or verb not in manifest.acts else \
-                spec.decide(self._acting(people, spec), verb, person, via=via, owner=owner, visibility=visibility)
-            if verdict.allowed and owner is not None and owner not in people:
-                # an owner the kernel does not know is not a person it could later FORGET (and no erase mark could order a late
-                # ask against them): their id is never written. Not on the roster = refused, for an owner as for an actor.
+                spec.decide(acting, verb, person, via=via, owner=owner, visibility=visibility)
+            if verdict.allowed and owner is not None and owner not in acting:
+                # Not on the roster = refused, for an OWNER as for an actor, and by the SAME roster (``_acting``: the current
+                # one, unless the area is ``former``): a member taken off it, kept only so their records can be forgotten, owns
+                # nothing anyone may change here, whoever asks and whatever the area's table says (no table has to remember
+                # it). An owner the kernel does not know at all is besides not a person it could later FORGET: never written.
                 verdict = Decision(False, UNKNOWN_PERSON)
             if not verdict.allowed:
                 self._refuse(skill, verb, verdict.reason, person if known else None, spec.target, target)
@@ -152,8 +159,8 @@ class Door:
 
     def _acting(self, people: dict, spec: Area) -> dict:
         """The people an area's table is decided from: the CURRENT roster only, unless the area says a former member still acts
-        (``Area.former``). Every area gets this from here, so no table can forget it. The people map itself (former members
-        kept) still answers "is this owner someone the kernel could forget" (``ask``) and whose record a refusal is."""
+        (``Area.former``). Every area gets this from here, so no table can forget it, and ``ask`` checks the OWNER against the
+        same map. The people map itself (former members kept) still answers whose record a refusal or a report is."""
         if spec.former or self.roster is None:
             return people
         current = self.roster()
