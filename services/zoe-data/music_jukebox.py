@@ -65,10 +65,12 @@ async def require_member_panel_or_jukebox(request: Request, user: dict = Depends
     """A member or the panel (``require_member_or_panel``'s rule), or a phone holding a valid jukebox token for an active,
     guest-allowing panel - never over the tunnel. For play / queue-a-song and the jukebox page's now-playing + search only."""
     if await panel_principal.may_control_home(request, user):
+        panel_principal._note_actor(user)
         return user
     pid = panel_of(str(request.headers.get(HEADER, "") or "").strip())
     if pid and not panel_kiosk_credential.via_public_tunnel(request) and await panel_principal._with_registry(
             None, panel_principal._kiosk_panel_allows_guest, pid):
+        panel_principal._note_actor(None)      # a phone with a panel's jukebox token: nobody identified, the panel's reach
         return user
     raise panel_principal._refuse("no member, panel or jukebox token", request, user,
                                   "Scan the code on the panel again, or sign in")

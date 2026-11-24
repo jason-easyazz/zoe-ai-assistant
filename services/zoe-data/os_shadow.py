@@ -1183,6 +1183,15 @@ JOURNAL_DOOR_VERBS = ("journal.create", "journal.edit", "journal.delete")
 #: number, a birthday, a note or a relationship. Reading is not asked.
 PEOPLE_FLAG = "ZOE_OS_PEOPLE"
 PEOPLE_DOOR_VERBS = ("contact.create", "contact.edit", "contact.delete")
+#: The two ACTION areas (``labs/zoe-os/zoe_os/music_door.py`` / ``home_door.py``; the service doors are ``action_doors``, called
+#: by the one sender of each: ``music_service._ma_response``, ``home_control.send``). Nothing is stored for either. Ids and closed
+#: codes only: never a track, a device, a room or a scene name. A home verb is ``<class>.<act>``, both closed.
+MUSIC_FLAG = "ZOE_OS_MUSIC"
+MUSIC_DOOR_VERBS = ("music.play", "music.stop", "music.louder", "music.quieter", "music.queue", "music.library")
+HOME_FLAG = "ZOE_OS_HOME"
+HOME_CLASSES = ("light", "switch", "climate", "cover", "lock", "scene", "media", "other")
+HOME_ACTS = ("on", "off", "set", "open", "close")
+HOME_DOOR_VERBS = (*(f"{c}.{a}" for c in HOME_CLASSES for a in HOME_ACTS), "level.set")
 AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_VERBS, "list_ask", "list_report", "list", "items", False),
          "reminders": _Area(REMINDERS_FLAG, None, REMINDER_DOOR_VERBS, REMINDER_SHADOW_VERBS, "door_ask", "door_report", "target",
                             None, True),
@@ -1191,7 +1200,9 @@ AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_V
          "calendar": _Area(CALENDAR_FLAG, None, CALENDAR_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
          "notes": _Area(NOTES_FLAG, None, NOTE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
          "journal": _Area(JOURNAL_FLAG, None, JOURNAL_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
-         "people": _Area(PEOPLE_FLAG, None, PEOPLE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
+         "people": _Area(PEOPLE_FLAG, None, PEOPLE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
+         "music": _Area(MUSIC_FLAG, None, MUSIC_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
+         "home": _Area(HOME_FLAG, None, HOME_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
 ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
 #                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
 DOOR_QUEUE_MAX = 256

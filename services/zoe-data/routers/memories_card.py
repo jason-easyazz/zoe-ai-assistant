@@ -115,7 +115,9 @@ async def _source(card: prc.Card, it: dict, caller: Optional[dict]) -> dict:
 async def act(body: _Act, request: Request, card: prc.Card = Depends(_require_card),
               caller: Optional[dict] = Depends(_caller)):
     import memory_space
+    import panel_principal as _pp
 
+    _pp._note_actor({"user_id": card.member_id})      # the action doors (music, home): who acts: the card's member
     it = _item(card, body.item)
     if body.action in ("forget", "wrong", "forget_person"):
         await _require_review(card)

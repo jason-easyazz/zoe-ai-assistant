@@ -12,6 +12,7 @@ to a friendly "couldn't reach the home hub" card, never a broken turn.
 from __future__ import annotations
 
 import home_control
+import kernel_door
 import asyncio
 import contextvars
 import logging
@@ -97,6 +98,8 @@ async def _ha_post(path: str, payload: dict[str, Any]) -> Optional[dict[str, Any
             logger.debug("HA POST %s -> HTTP %s", path, r.status_code)
             return None
         return r.json()
+    except kernel_door.Refused:      # the Zoe OS kernel said no (ZOE_OS_HOME=kernel): not "the bridge is down": the caller says so
+        raise
     except httpx.TimeoutException as exc:
         marks = _TIMED_OUT.get()
         if marks is not None:
@@ -369,8 +372,9 @@ async def set_device(entity_id: str, on: bool, *, brightness_pct: int | None = N
         payload["data"] = data
     import home_opening
 
-    # Backstop: unlocking or opening needs an adult member or a verified voice session; nothing is sent otherwise. (The Zoe
-    # OS kernel's home door decides the same classes when ZOE_OS_HOME=kernel and replaces this check there.)
+    # Backstop: unlocking or opening needs an adult member or a verified voice session; nothing is sent otherwise. It stays
+    # on whatever ZOE_OS_HOME says: with the kernel's home door on (it sits in ``home_control.send``, so it is asked only
+    # AFTER this check has passed) BOTH must agree before anything is sent. The door adds to this check; it never replaces it.
     if await home_opening.refused(entity_id, payload["action"], via="spoken"):
         return False
     result = await _ha_post(home_control.DEVICE, payload)

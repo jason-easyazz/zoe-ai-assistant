@@ -1021,6 +1021,11 @@ async def submit_pin(payload: dict, request: Request = None, db=Depends(get_db))
                 if pending_transcript:
                     # Replay the held voice command under the verified identity.
                     async def _run_replay():
+                        import panel_principal as _pp
+
+                        # the action doors (music, home): who acts: the member the PIN verified. Called directly, ``voice_command``'s own
+                        # dependency (``_require_voice_auth``, which notes it) never runs, so it is noted here.
+                        _pp._note_actor({"user_id": resolved_user_id})
                         return await voice_command(
                             {
                                 "text": pending_transcript,

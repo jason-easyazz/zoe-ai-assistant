@@ -88,7 +88,7 @@ MUSIC_RECORDED = {
     (_SCREEN, "music_group", _MUSIC): ("music_screen_group",),
     (_SCREEN, "music_queue_move", _MUSIC): ("music_screen_queue_move",),
     (_SCREEN, "music_queue_save", _MUSIC): ("music_screen_queue_save",),
-    (_ROUTER, "_execute_music_intent", _MUSIC): ("music_intent_favorite",),
+    (_ROUTER, "_execute_music_intent_asked", _MUSIC): ("music_intent_favorite",),     # the body the kernel door runs (this branch)
     ("music_discovery.py", "play_discovery", _MUSIC): ("music_spoken_discovery",),
     (_SCREEN, "music_playlist_add", _MUSIC): ("music_screen_playlist_add",),
     (_SCREEN, "music_dont_stop", _MUSIC): ("music_screen_dont_stop",),

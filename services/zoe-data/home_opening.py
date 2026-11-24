@@ -11,7 +11,9 @@ closing, locking or arming it - is sent to Home Assistant only for:
 The shared panel with nobody identified, and a guest, are refused. Lock, close and arm stay open to everyone who may control
 the house today. Every member-driven sender asks ``refused(...)`` right before it sends; a refusal sends nothing.
 
-The Zoe OS kernel's home door (``ZOE_OS_HOME=kernel``) decides the same classes when it is on and replaces this check there.
+The Zoe OS kernel's home door (``ZOE_OS_HOME=kernel``) decides the same classes when it is on. It does NOT replace this
+check: this one stays on whatever the flag says and runs first, the door (in ``home_control.send``) is asked only for a
+command this has let through, and both must agree before anything is sent.
 """
 from __future__ import annotations
 

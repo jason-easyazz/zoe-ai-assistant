@@ -1619,8 +1619,9 @@ async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> 
         return {"error": panel_principal.HOME_CONTROL_REFUSAL}
     import home_opening
 
-    # Unlocking or opening needs an adult member or a verified voice session; nothing is sent otherwise. (The Zoe OS kernel's
-    # home door decides the same classes when ZOE_OS_HOME=kernel and replaces this check there.)
+    # Unlocking or opening needs an adult member or a verified voice session; nothing is sent otherwise. On whatever
+    # ZOE_OS_HOME says: the Zoe OS kernel's home door (in ``home_control.send``) is asked only after this has passed, and
+    # both must agree. The door adds to this check; it never replaces it.
     if await home_opening.refused(entity_id, action, data, via="brain_tool"):
         return {"error": home_opening.REFUSAL, "status": "refused"}
     body = {"entity_id": entity_id, "action": action, "data": data or {}}
@@ -1633,6 +1634,10 @@ async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> 
     except httpx.ConnectError:
         return {"error": "HA bridge offline — is homeassistant-mcp-bridge running?"}
     except Exception as exc:
+        import kernel_door
+
+        if isinstance(exc, kernel_door.Refused):      # the Zoe OS kernel said no (ZOE_OS_HOME=kernel): nothing was sent
+            return {"error": exc.line(), "status": "refused"}
         return {"error": str(exc)}
 
 

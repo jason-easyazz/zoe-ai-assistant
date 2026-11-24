@@ -705,6 +705,9 @@ async def confirm_action_form(
     session_id = str(body.get("session_id") or "").strip() or None
     data = body.get("data") or {}
     user_id = user["user_id"]
+    import panel_principal as _pp
+
+    _pp._note_actor(user)      # the action doors (music, home): who acts
 
     if not panel_type:
         raise HTTPException(status_code=400, detail="panel_type is required")
