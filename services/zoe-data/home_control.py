@@ -27,6 +27,13 @@ async def send(base_url: str, path: str, body: dict, *, timeout: Any = None, cli
     never raise catches it, as it always did). ``client``: the caller's own open client (music through the house keeps one)."""
     if path not in PATHS:
         raise ValueError("not a Home Assistant command path")
+    import os_shadow
+
+    if not os_shadow.area_on("home"):      # the door off (the default): the flag read, then main's send exactly; nothing classified
+        if client is not None:
+            return await client.post(f"{base_url}{path}", json=body)
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            return await c.post(f"{base_url}{path}", json=body)
     import action_doors
 
     verb, entity = action_doors.home_verb(path, body)

@@ -27,6 +27,11 @@ import os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services/zoe-data'))
 
+# Never the live Home Assistant bridge, for every test under tests/ (unit, integration, e2e): a test whose fake misses the
+# sender must hit a dead port, not post a real device command to the house. UNCONDITIONAL (never setdefault), before any
+# zoe-data import: several modules read the address at import. The zoe-data suite has the same line in its own conftest.
+os.environ["ZOE_HA_BRIDGE_URL"] = "http://127.0.0.1:9"
+
 # Pin the household palace off the live directory for every test under tests/ too (the
 # zoe-data suite has its own pin in services/zoe-data/tests/conftest.py). Without it a tests/
 # module that imports memory_service opens ~/.mempalace; live_store_guard now refuses that
