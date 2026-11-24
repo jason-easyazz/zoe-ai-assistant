@@ -1163,13 +1163,25 @@ class _Area(NamedTuple):
 REMINDERS_FLAG = "ZOE_OS_REMINDERS"
 REMINDER_DOOR_VERBS = ("reminder.create", "reminder.edit", "reminder.done", "reminder.snooze", "reminder.delete")
 REMINDER_SHADOW_VERBS = frozenset({"reminder_create"})
+#: The alarms and timers areas (``labs/zoe-os/zoe_os/alarm_door.py``; the service doors are ``alarms._gate`` / ``_note`` and
+#: ``skybridge_service._TimerStore._note``). ONE flag for both. Ids only: never a label, a time or a sound.
+ALARMS_FLAG = "ZOE_OS_ALARMS"
+ALARM_DOOR_VERBS = ("alarm.create", "alarm.edit", "alarm.delete", "alarm.snooze", "alarm.stop")
+TIMER_DOOR_VERBS = ("timer.create", "timer.edit", "timer.cancel", "timer.stop")
+ALARM_SHADOW_VERBS = frozenset({"alarm_create"})
 AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_VERBS, "list_ask", "list_report", "list", "items", False),
          "reminders": _Area(REMINDERS_FLAG, None, REMINDER_DOOR_VERBS, REMINDER_SHADOW_VERBS, "door_ask", "door_report", "target",
-                            None, True)}
+                            None, True),
+         "alarms": _Area(ALARMS_FLAG, None, ALARM_DOOR_VERBS, ALARM_SHADOW_VERBS, "door_ask", "door_report", "target", None, True),
+         "timers": _Area(ALARMS_FLAG, None, TIMER_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
 ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
 #                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
 DOOR_QUEUE_MAX = 256
 ALLOW, REFUSE, NOT_CHECKED = "allow", "refuse", "not_checked"
+#: a change that was made FIRST and told to the kernel afterwards (``record_door``: silencing a ringing alarm, every timer change):
+#: ``recorded`` = the kernel's table allows it and it is on the record; ``objected`` = the table says no. The change stands
+#: either way: nothing here can hold it up or undo it.
+RECORDED, OBJECTED = "recorded", "objected"
 #: every reason an ask can end in (closed: the log line carries nothing else). The kernel's own refusal codes first.
 DOOR_REFUSALS = ("unknown_person", "not_owner", "adults_only", "not_in_manifest", "forgotten")
 DOOR_REASONS = ("-", *DOOR_REFUSALS, "other", "timeout", "unavailable", "circuit", "not_provisioned", "no_credential", "protocol",
@@ -1231,7 +1243,7 @@ def _door_log(verb: str, decision: str, reason: str, ask_ms: float, area: str = 
     """ONE line per decided change; closed codes and a number only."""
     area = area if area in AREAS else "unknown"
     verb = verb if area in AREAS and verb in AREAS[area].verbs else "unknown"
-    decision = decision if decision in (ALLOW, REFUSE, NOT_CHECKED) else NOT_CHECKED
+    decision = decision if decision in (ALLOW, REFUSE, NOT_CHECKED, RECORDED, OBJECTED) else NOT_CHECKED
     reason = (reason or "-") if (reason or "-") in DOOR_REASONS else "other"
     ask_ms = float(ask_ms)
     logger.info("ZOE_OS_ACT area=%s verb=%s decision=%s reason=%s ask_ms=%.1f", area, verb, decision, reason, ask_ms)
@@ -1323,6 +1335,15 @@ def _door_run() -> None:
                 out = _door_ask(kernel, verb, user_id, args, until, op)
                 if not fut.done():
                     fut.set_result(out)
+            elif job[0] == "record":      # a change already made: asked and, when the table allows it, closed ``done`` at once
+                _, verb, user_id, args, area, queued = job
+                spec = AREAS[area]
+                decision, reason, ask = _door_ask(kernel, verb, user_id, args, time.monotonic() + OP_TIMEOUT_S, spec.ask_op)
+                if decision == ALLOW:
+                    kernel.call(SKILL_BRAIN, spec.report_op, time.monotonic() + OP_TIMEOUT_S, ask=ask, outcome="done",
+                                **({"stamps": args["stamps"]} if args.get("stamps") else {}))
+                _door_log(verb, {ALLOW: RECORDED, REFUSE: OBJECTED}.get(decision, NOT_CHECKED), reason,
+                          (time.perf_counter() - queued) * 1000, area)
             else:                     # a report: best effort, bounded; an ask left open is "uncertain" at the kernel's next start.
                 # It carries the ASK's stamps: after a forget of a member it names the kernel refuses it and writes nothing.
                 kernel.call(SKILL_BRAIN, job[4], time.monotonic() + OP_TIMEOUT_S, ask=job[1], outcome=job[2],
@@ -1369,6 +1390,55 @@ async def ask_door(area: str, verb: str, user_id: str, *, panel: bool = False, t
                       turn_id=turn_id, stamps_at=stamps_at)
 
 
+def _ask_args(spec: "_Area", area: str, uid: str, panel: bool, target, parts, owner, household: bool, turn_id, stamps_at) -> tuple:
+    """What one ask carries, and the erase stamp of every member it names (read NOW, or as of ``stamps_at``). Ids only."""
+    args: dict = {"visibility": "household" if household else "private"}
+    if spec.named:
+        args["area"] = area
+    if panel:
+        args["via"] = "panel"
+    for key, value in ((spec.target, target), ("owner", owner), ("turn", turn_id)):
+        if value:
+            args[key] = str(value)
+    ids = [str(i) for i in parts if i][:16] if spec.parts else []
+    if ids:
+        args[spec.parts] = ids
+    stamps = {m: erase_stamp(m, stamps_at) for m in ("" if panel else uid, str(owner or "")) if m}
+    if stamps:
+        args["stamps"] = stamps
+    return args, stamps
+
+
+def record_door(area: str, verb: str, user_id: str, *, panel: bool = False, target: Optional[str] = None,
+                owner: Optional[str] = None, household: bool = False, stamps_at: Optional[dict] = None) -> None:
+    """Tell the kernel about a change that HAS ALREADY BEEN MADE (silencing a ringing alarm; a timer change, whose path has
+    nowhere to wait). Never blocks, never raises, never refuses: it builds the same ask an ``ask_door`` would (ids and stamps
+    only, the stamps read here), puts it on the door's queue and returns. The door thread asks, closes an allowed ask ``done``
+    at once, and writes the one ``ZOE_OS_ACT`` line: ``recorded`` | ``objected`` (the table says no; the change stands) |
+    ``not_checked``. Call only when ``area_on(area)``."""
+    queued = time.perf_counter()
+    try:
+        uid = (user_id or "").strip()
+        spec = AREAS[area] if area in AREAS else None
+        if spec is None or verb not in spec.verbs:
+            return _door_log(verb, NOT_CHECKED, "bad_verb", 0.0, area)
+        if not uid and not panel:
+            return _door_log(verb, NOT_CHECKED, "no_actor", 0.0, area)
+        args, stamps = _ask_args(spec, area, uid, panel, target, (), owner, household, None, stamps_at)
+        if any(user_erase_gate.in_progress(m) for m in stamps):
+            return _door_log(verb, NOT_CHECKED, "erasing", 0.0, area)
+        if _door_worker is None or not _door_worker.is_alive():
+            threading.Thread(target=_ensure_door, name="os-door-start", daemon=True).start()    # never a file read or a join here
+        with contextlib.suppress(RuntimeError):     # (no running loop: a caller off the service's loop triggers no rewrite)
+            asyncio.get_running_loop()
+            _roster_wanted(tuple(stamps))           # a member the roster does not name yet: rewritten in a task of its own
+        _door_q.put_nowait(("record", verb, uid or "panel", args, area, queued))
+    except queue.Full:
+        _door_log(verb, NOT_CHECKED, "queue_full", 0.0, area)
+    except Exception:  # noqa: BLE001 - never an exception to a change that was already made
+        _door_log(verb, NOT_CHECKED, "worker", 0.0, area)
+
+
 async def _ask(area: str, verb: str, user_id: str, *, panel: bool, target: Optional[str], parts, owner: Optional[str],
                household: bool, turn_id: Optional[str], stamps_at: Optional[dict]) -> tuple:
     started = time.perf_counter()
@@ -1382,20 +1452,7 @@ async def _ask(area: str, verb: str, user_id: str, *, panel: bool, target: Optio
         elif not uid and not panel:
             out = (NOT_CHECKED, "no_actor", None)
         else:
-            args: dict = {"visibility": "household" if household else "private"}
-            if spec.named:
-                args["area"] = area
-            if panel:
-                args["via"] = "panel"
-            for key, value in ((spec.target, target), ("owner", owner), ("turn", turn_id)):
-                if value:
-                    args[key] = str(value)
-            ids = [str(i) for i in parts if i][:16] if spec.parts else []
-            if ids:
-                args[spec.parts] = ids
-            stamps = {m: erase_stamp(m, stamps_at) for m in ("" if panel else uid, str(owner or "")) if m}
-            if stamps:
-                args["stamps"] = stamps
+            args, stamps = _ask_args(spec, area, uid, panel, target, parts, owner, household, turn_id, stamps_at)
             # read WITH the stamps, on the loop: an ask made while a member erase is running is never queued (its stamp may already
             # be past the erase's kernel forget, and the door thread's own look could come after the erase has ended)
             if any(user_erase_gate.in_progress(m) for m in stamps):

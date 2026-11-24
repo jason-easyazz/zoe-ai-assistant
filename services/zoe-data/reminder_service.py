@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import contextvars
 import json
-from contextlib import asynccontextmanager
 import logging
 import re
 import uuid
@@ -100,16 +99,7 @@ async def _gate(verb: str, *, actor: Mapping[str, object], reminder_id: str, own
     return kernel_door.Decision(decision, reason, ask, stamps=stamps, area="reminders")
 
 
-@asynccontextmanager
-async def _reported(decision: "kernel_door.Decision | None"):
-    """Around a door's own writes: the kernel hears ``done`` once they have returned (inside a caller's held transaction: once
-    THAT has committed, ``kernel_door.reports_after``), or ``failed`` if any of them raised."""
-    try:
-        yield
-    except BaseException:
-        kernel_door.wrote(decision, "failed")
-        raise
-    kernel_door.wrote(decision)
+_reported = kernel_door.reported      # around a door's own writes: ``done`` once they returned, ``failed`` if one raised
 
 
 def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str | None:

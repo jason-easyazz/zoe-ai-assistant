@@ -91,7 +91,7 @@ async def create_alarm(payload: dict, request: Request, user: dict = Depends(req
         a = await alarms.create_alarm(
             db, v.owner_id, time_hhmm=p.get("time_hhmm") or p.get("time"), repeat=p.get("repeat", "once"), once_date=p.get("once_date"),
             label=p.get("label", ""), sound_kind=p.get("sound_kind", "tone"), sound_id=p.get("sound_id", ""),
-            sound_name=p.get("sound_name", ""), snooze_minutes=p.get("snooze_minutes"), ramp_seconds=p.get("ramp_seconds"))
+            sound_name=p.get("sound_name", ""), snooze_minutes=p.get("snooze_minutes"), ramp_seconds=p.get("ramp_seconds"), actor=v)
     except alarms.AlarmError as e:
         raise _err(e) from None
     return {"alarm": alarms.present(a, v)}
@@ -103,7 +103,7 @@ async def update_alarm(alarm_id: str, payload: dict, request: Request, user: dic
     v = viewer_of(user)
     a = await _load(db, alarm_id, v, alarms.can_edit)
     try:
-        a = await alarms.update_alarm(db, a, payload or {})
+        a = await alarms.update_alarm(db, a, payload or {}, actor=v)
     except alarms.AlarmError as e:
         raise _err(e) from None
     return {"alarm": alarms.present(a, v)}
@@ -111,8 +111,9 @@ async def update_alarm(alarm_id: str, payload: dict, request: Request, user: dic
 
 @router.delete("/{alarm_id}")
 async def delete_alarm(alarm_id: str, request: Request, user: dict = Depends(require_member_or_panel), db=Depends(get_db)):
-    a = await _load(db, alarm_id, viewer_of(user), alarms.can_edit)
-    return {"ok": await alarms.delete_alarm(db, a["id"])}
+    v = viewer_of(user)
+    a = await _load(db, alarm_id, v, alarms.can_edit)
+    return {"ok": await alarms.delete_alarm(db, a["id"], actor=v, alarm=a)}
 
 
 @router.post("/{alarm_id}/snooze")
@@ -120,7 +121,7 @@ async def snooze_alarm(alarm_id: str, request: Request, user: dict = Depends(req
     v = viewer_of(user)
     a = await _load(db, alarm_id, v, alarms.can_silence)
     try:
-        a = await alarms.snooze(db, a)
+        a = await alarms.snooze(db, a, actor=v)
     except alarms.AlarmError as e:
         raise _err(e) from None
     return {"alarm": alarms.present(a, v), "snoozed_until": a["snooze_until"]}
@@ -130,7 +131,7 @@ async def snooze_alarm(alarm_id: str, request: Request, user: dict = Depends(req
 async def dismiss_alarm(alarm_id: str, request: Request, user: dict = Depends(require_member_or_panel), db=Depends(get_db)):
     v = viewer_of(user)
     a = await _load(db, alarm_id, v, alarms.can_silence)
-    return {"alarm": alarms.present(await alarms.dismiss(db, a), v)}
+    return {"alarm": alarms.present(await alarms.dismiss(db, a, actor=v), v)}
 
 
 @router.post("/{alarm_id}/overrides")
@@ -138,7 +139,7 @@ async def set_override(alarm_id: str, payload: dict, request: Request, user: dic
     v, p = viewer_of(user), payload or {}
     a = await _load(db, alarm_id, v, alarms.can_edit)
     try:
-        a = await alarms.set_override(db, a, p.get("date"), time_hhmm=p.get("time_hhmm"), skip=bool(p.get("skip")))
+        a = await alarms.set_override(db, a, p.get("date"), time_hhmm=p.get("time_hhmm"), skip=bool(p.get("skip")), actor=v)
     except alarms.AlarmError as e:
         raise _err(e) from None
     return {"alarm": alarms.present(a, v)}
@@ -149,7 +150,7 @@ async def clear_override(alarm_id: str, on_date: str, request: Request, user: di
                          db=Depends(get_db)):
     v = viewer_of(user)
     a = await _load(db, alarm_id, v, alarms.can_edit)
-    b = await alarms.clear_override(db, a, on_date)
+    b = await alarms.clear_override(db, a, on_date, actor=v)
     if b is None:
         raise HTTPException(status_code=404, detail="That day has no change to undo")
     return {"alarm": alarms.present(b, v)}
