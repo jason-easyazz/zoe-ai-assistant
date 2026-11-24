@@ -464,7 +464,8 @@ async def test_a_listed_pair_with_plain_data_is_still_for_everyone_and_looks_nob
         assert await home_opening.refused("remote.den", "send_command", {"command": "womble"}, user=KID, via="panel_route") is True
     assert [r.getMessage() for r in caplog.records if "HOME_OPENING" in r.getMessage()] == [
         "HOME_OPENING refused via=panel_route domain=unlisted_service"]
-    assert "womble" not in caplog.text and "remote" not in caplog.text
+    ours = "\n".join(r.getMessage() for r in caplog.records if r.name == "home_opening")      # this module's own lines only: the
+    assert ours and "womble" not in ours and "remote" not in ours                             # route's INFO line names the entity
 
 
 async def test_the_music_sender_asks_too_so_play_an_address_is_adult_only(house):
