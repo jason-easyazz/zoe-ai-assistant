@@ -202,3 +202,59 @@ def test_the_daemon_serves_the_calendar_on_its_existing_socket(tmp_path):
     finally:
         d.stop()
     assert b"kiosk-1" not in (state / "kernel" / "zoe-os.db").read_bytes()
+
+
+# ---- the calendar of a FORMER member: nobody's to change (review round 4; ``door.Door.ask`` checks the owner by the roster) ------
+from test_roster_sync import BRAIN, built, state, write  # noqa: E402,F401 - the daemon build fixture and its roster file
+
+
+def _event(srv, verb: str, person: str, *, owner: str | None, visibility: str, via: str | None = None) -> str:
+    """The daemon's own door op (the roster file re-read first, as on the wire): ``ok`` or the refusal code."""
+    try:
+        with srv.kernel.spine._lock:
+            srv._op_door_ask(BRAIN, {"area": "calendar", "verb": verb, "person": person, "target": "ev0000000001", "owner": owner,
+                                     "visibility": visibility, "via": via})
+        return "ok"
+    except Refused as exc:
+        return exc.wire
+
+
+def test_an_event_on_the_calendar_of_a_member_taken_off_the_roster_is_nobodys_to_change(built):
+    """Review round 4 (#2691): the kernel keeps a member taken off people.json in its people map while a record names them (so
+    it can be forgotten), and the door checked an event's OWNER against that map. So an adult could still add, change or
+    delete an event on a former member's calendar, a child or the panel could still add a household one there. Through the
+    real daemon build: every ask the table allowed while the member was on the roster is ``unknown_person`` once they are
+    off it (whoever asks: an adult, a guardian, a child, the panel), what the table refused stays refused, the former member
+    can still be forgotten, and back on the roster their calendar is changed as before.
+
+    Control run: ``owner not in acting`` put back to ``owner not in people`` in ``door.Door.ask`` -> the first ask that was
+    allowed is ``ok`` again and this fails."""
+    daemon, k, srv, path = built
+    everyone = [{"id": OWNER, "role": "adult"}, {"id": ADULT2, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]},
+                {"id": KID2, "role": "child", "guardians": [OWNER]}]
+    asks = [(verb, who, visibility, via) for verb in VERBS for visibility in ("household", "private")
+            for who, via in ((OWNER, None), (ADULT2, None), (KID2, None), ("kiosk-1", "panel"))]
+
+    def answers() -> dict:
+        return {a: _event(srv, a[0], a[1], owner=KID, visibility=a[2], via=a[3]) for a in asks}
+
+    write(path, everyone)
+    assert _event(srv, "event.create", KID, owner=KID, visibility="private") == "ok"              # a record names them
+    on_the_roster = answers()
+    were_allowed = [a for a in asks if on_the_roster[a] == "ok"]
+    assert {("event.edit", OWNER, "private", None), ("event.delete", ADULT2, "household", None),
+            ("event.create", KID2, "household", None), ("event.create", "kiosk-1", "household", "panel")} <= set(were_allowed)
+    write(path, [person for person in everyone if person["id"] != KID])                           # KID taken off the file
+    assert _event(srv, "event.edit", OWNER, owner=OWNER, visibility="private") == "ok"            # the file is re-read here
+    assert KID in k.grants.people and KID not in srv.roster                                       # kept (forgettable), off it
+    refusals = k.spine.refusals
+    off_the_roster = answers()
+    for a in asks:                         # (an adult's ask for a CHILD's private event: the table no longer knows a child, not_owner)
+        assert off_the_roster[a] in ((door.UNKNOWN_PERSON, door.NOT_OWNER) if a in were_allowed else (on_the_roster[a],)), a
+    assert all(off_the_roster[a] == door.UNKNOWN_PERSON for a in were_allowed if a[2] == "household")
+    assert "ok" not in off_the_roster.values() and k.spine.refusals == refusals + len(asks)      # refusals recorded, not errors
+    write(path, everyone)
+    assert answers() == on_the_roster                                                             # back on the roster: as before
+    write(path, [person for person in everyone if person["id"] != KID])
+    assert _event(srv, "event.delete", OWNER, owner=KID, visibility="household") == door.UNKNOWN_PERSON
+    assert k.spine.forget(KID, actor=KID).count >= 1                                              # and they can still be forgotten
