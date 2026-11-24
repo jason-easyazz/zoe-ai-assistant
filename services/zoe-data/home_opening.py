@@ -120,6 +120,8 @@ def _names_a_selector(value: Any, depth: int = 0) -> bool:
 def reaches_unnamed(entity_id: Any, data: Any = None) -> bool:
     """Could this command reach entities it does not name one by one? (See ``SELECTOR_KEYS`` above.)"""
     ids = _ids(entity_id, data)
+    if not ids:
+        return True      # no id at all (empty, blank, missing): it names nothing, so what it would reach is not known
     return (_names_a_selector(data) or not all(_PLAIN_ID.match(i) for i in ids)
             or bool({i.partition(".")[0] for i in ids} & GENERIC_DOMAINS))
 

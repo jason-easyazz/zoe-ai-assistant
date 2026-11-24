@@ -345,6 +345,35 @@ async def test_the_spoken_resolver_says_the_sentence_and_sends_nothing_for_anyon
     assert house["sent"] == [("/devices/control", "switch.porch_lamp", "turn_on"), ("/devices/control", "cover.garage_door", "turn_on")]
 
 
+@pytest.mark.parametrize("entity", ["", "   ", None])
+async def test_a_command_with_no_entity_id_at_all_is_adult_only(house, entity):
+    """An empty, blank or missing id names nothing: refused for anyone but an adult, never "an ordinary command".
+    Control run: with the ``if not ids`` line removed from ``reaches_unnamed`` every case here returns False for the child."""
+    assert home_opening.reaches_unnamed(entity) is True and home_opening.reaches_unnamed(entity, {"brightness": 3}) is True
+    for turn in NOBODY + [KID]:
+        home_opening.note_turn(turn)
+        assert await home_opening.refused(entity, "turn_on", via="spoken") is True
+    home_opening.note_turn(MEMBER)
+    assert await home_opening.refused(entity, "turn_on", via="spoken") is False
+    assert home_opening.reaches_unnamed("light.kitchen_lamp") is False      # a plain id is still an ordinary command
+
+
+async def test_the_spoken_resolver_says_the_sentence_for_a_device_with_no_id(house, monkeypatch):
+    """The REAL ``resolve_smart_home`` when the listing holds a device whose entity id is empty: a child, a guest and the bare
+    panel hear the refusal sentence and nothing is sent (before, the empty id slipped past the check and they heard the
+    ordinary "couldn't reach" failure). Control run: with the ``if not ids`` line removed the first assertion fails."""
+    async def listing(path):
+        rows = [{"entity_id": "", "name": "Womble Lamp", "state": "off"}]
+        return {"/lights": {"lights": []}, "/switches": {"switches": rows}, "/scenes": {"scenes": []}}.get(path, {"entities": []})
+
+    monkeypatch.setattr(smart_home_service, "_ha_get", listing)
+    said = SimpleNamespace(action="turn_on", query="womble lamp", entity_id="")
+    for turn in NOBODY + [KID]:
+        home_opening.note_turn(turn)
+        out = await smart_home_service.resolve_smart_home(said)
+        assert out["spoken_summary"] == home_opening.REFUSAL and out["cards"] == [] and house["sent"] == []
+
+
 async def test_a_lookup_that_fails_is_not_an_adult_and_logs_no_id_and_no_traceback(house, monkeypatch, caplog):
     """Positively an adult or refused, with ``is_adult`` NOT mocked: the member-mode read underneath it raises. Controls run:
     with ``manner_block.is_adult`` answering True when its lookup raises the first assertion fails; with ``quiet=True`` dropped from
