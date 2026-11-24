@@ -68,9 +68,9 @@ def _act(env, step, action="done"):
 
 def test_flag_off_every_route_is_404_before_anyone_is_identified(api, monkeypatch):
     """The gate runs FIRST: with the flag off neither route identifies anybody (the caller dependency, the real
-    ``get_current_user`` and the panel test are each recorded if called) and both answer 404. Controls run: with the gate
-    dependency dropped from the router the member's ``/today`` is 200; with the gate moved after the caller dependency
-    (``dependencies=[Depends(_caller), Depends(_on)]``) the caller is recorded and this fails."""
+    ``get_current_user`` and the panel test are each recorded if called) and both answer 404. Controls run (round 4, the gate is
+    now ``_Gated`` at route matching): its flag test dropped (``if False:``) -> the member's ``/today`` is 200 and the caller is
+    recorded."""
     called: list = []
 
     def caller():
@@ -172,9 +172,66 @@ def test_the_module_holds_no_sql_and_is_mounted_behind_its_flag():
     src = (SVC / "routers" / "routines.py").read_text("utf-8")
     assert not sql_scan.writes(src, sql_scan.write_pattern("routines", "routine_steps", "routine_days", "routine_day_steps"))
     assert "db.execute" not in src and "get_compat_db" not in src and "rs.act_tapped(" in src
-    assert "dependencies=[Depends(_on)]" in src
+    assert "route_class=_Gated" in src and "dependencies=[" not in src
     main = (SVC / "main.py").read_text("utf-8")
     assert "from routers.routines import router as routines_router" in main and "app.include_router(routines_router)" in main
+
+
+_BROKEN = (("malformed JSON", {"content": b'{"step": ', "headers": {"content-type": "application/json"}}),
+           ("wrong content type", {"content": b"step=x&action=done", "headers": {"content-type": "text/plain"}}),
+           ("no body", {}),
+           ("wrong parameter types", {"json": {"step": ["x"], "action": 7}, "params": {"step": "[]", "limit": "not-a-number"}}))
+
+
+def _routes() -> list:
+    """Every (method, path) of the router, read from the router itself (never listed by hand)."""
+    from fastapi.routing import APIRoute
+
+    out = [(m, r.path) for r in rr.router.routes if isinstance(r, APIRoute) for m in sorted(r.methods)]
+    assert len(out) >= 2 and {m for m, _ in out} >= {"GET", "POST"}
+    return out
+
+
+def test_flag_off_the_routes_answer_as_if_nothing_were_mounted_whatever_the_request(api, monkeypatch):
+    """Flag off is main: before this router was mounted every ``/api/routines`` request got the app's own 404
+    ``{"detail": "Not Found"}``. With the flag off every route of the router, by EVERY method (its own and the others), with a
+    malformed JSON body, a wrong content type, no body, or wrong parameter types, answers exactly what the same request gets
+    from an app with nothing mounted: never 422 (the gate used to be a router dependency, and FastAPI parses the body before it
+    solves any dependency), never 405, never the gate's own ``"Not found"``. Nobody is identified on the way.
+
+    Controls run: the old gate restored (``dependencies=[Depends(_on)]``, ``_on`` raising 404 ``"Not found"``, no
+    ``route_class``) -> the malformed-JSON POST is 422 and this fails; ``_Gated``'s flag test dropped (``if False:``) -> this
+    fails (the routes answer)."""
+    called: list = []
+    api.c.app.dependency_overrides[rr._caller] = lambda: called.append("_caller")
+    monkeypatch.setattr(rr, "get_current_user", lambda request: called.append("get_current_user"))
+    monkeypatch.setenv("ZOE_ROUTINES", "off")
+    _member(api, SAM)
+    unmounted = TestClient(FastAPI())
+    tried = 0
+    for _method, path in _routes():
+        for method in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+            for why, kw in _BROKEN:
+                got, want = api.c.request(method, path, **kw), unmounted.request(method, path, **kw)
+                assert (got.status_code, got.content) == (want.status_code, want.content), (method, path, why, got.text)
+                assert got.status_code == 404, (method, path, why)
+                if method != "HEAD":
+                    assert got.json() == {"detail": "Not Found"}, (method, path, why)
+                tried += 1
+    assert tried >= 2 * 7 * 4 and called == []
+
+
+def test_flag_on_a_malformed_body_is_still_422(api):
+    """The gate changes nothing with the flag on: a malformed JSON body to every body-taking route of the router is FastAPI's
+    422 as before (the request is never mistaken for a missing route), and a good one is answered. Control run: ``_Gated``
+    gating whatever the flag says (``and not rs.enabled()`` dropped) -> 404 here and this fails."""
+    _member(api, SAM)
+    writes = [(method, path) for method, path in _routes() if method in ("POST", "PUT", "PATCH", "DELETE")]
+    assert writes
+    for method, path in writes:
+        bad = api.c.request(method, path, content=b'{"step": ', headers={"content-type": "application/json"})
+        assert bad.status_code == 422 and bad.json()["detail"][0]["type"] == "json_invalid", (method, path, bad.text)
+    assert api.c.get("/api/routines/today").status_code == 200
 
 
 # ---- WHO, on the real path: nothing below is stubbed above the registry read and the authenticator ---------------------------------

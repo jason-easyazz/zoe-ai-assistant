@@ -1,4 +1,5 @@
-"""The routines card API (flag-dark ``ZOE_ROUTINES``: off = every route 404, the gate runs before auth and the database).
+"""The routines card API (flag-dark ``ZOE_ROUTINES``: off = the routes do not exist, read per request (``_Gated``): the app's
+own 404, as for a path nobody mounted, before the method, the body, auth or the database is looked at).
 
   GET  /api/routines/today        today's copy of every routine the caller may see
   POST /api/routines/steps/act    ``{"step", "action"}``  action = done | skip | snooze | undo
@@ -26,7 +27,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
+from starlette.routing import Match
 
 import panel_principal
 import routines_store as rs
@@ -35,12 +38,19 @@ from auth import get_current_user
 ACTIONS = ("done", "skip", "snooze", "undo")
 
 
-def _on() -> None:
-    if not rs.enabled():
-        raise HTTPException(status_code=404, detail="Not found")
+class _Gated(APIRoute):
+    """A route of this router MATCHES NOTHING while ``ZOE_ROUTINES`` is off (read per request), so the app answers exactly as it
+    did before the router was mounted: its own 404 ``{"detail": "Not Found"}`` for every method, body and parameter. A gate in a
+    dependency runs too late: FastAPI parses the body (a malformed one is 422) before it solves any dependency."""
+
+    def matches(self, scope):
+        match, child_scope = super().matches(scope)
+        if match is not Match.NONE and not rs.enabled():
+            return Match.NONE, {}
+        return match, child_scope
 
 
-router = APIRouter(prefix="/api/routines", tags=["routines"], dependencies=[Depends(_on)])
+router = APIRouter(prefix="/api/routines", tags=["routines"], route_class=_Gated)
 
 
 async def _caller(request: Request) -> Optional[dict]:
