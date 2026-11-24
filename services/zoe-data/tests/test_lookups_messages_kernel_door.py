@@ -213,7 +213,7 @@ SENDERS = {
     ("greploop_guard.py", "_run_cheap_agent"): (1, _ENG),
     ("greptile_client.py", "_mcp_call"): (1, _ENG),
     ("hindsight_memory.py", "HindsightMemoryClient._request"): (1, _LOCAL),
-    ("home_control.py", "send"): (1, _HA),
+    ("home_control.py", "send"): (2, _HA),              # the door off: main's send verbatim; the door on: the same send, asked first
     ("intent_classifier_llm.py", "classify_intent_with_context"): (1, _MODEL),
     ("intent_router.py", "_execute_music_intent_asked"): (4, _MA),
     ("intent_router.py", "_execute_music_intent_asked._log_play_event"): (2, _MA),
