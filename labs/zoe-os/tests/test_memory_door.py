@@ -226,3 +226,64 @@ def test_the_daemon_serves_memory_on_its_existing_socket_and_has_no_field_for_wo
     finally:
         d.stop()
     assert b"kiosk-1" not in (state / "kernel" / "zoe-os.db").read_bytes()
+
+
+# ---- a FORMER member's memory: nobody's to change (review round 4; ``door.Door.ask`` checks the owner by the roster) ------------
+from test_roster_sync import BRAIN, built, state, write  # noqa: E402,F401 - the daemon build fixture and its roster file
+
+
+def _ask(srv, verb: str, person: str, *, owner: str | None, visibility: str, via: str | None = None) -> str:
+    """The daemon's own door op (the roster file re-read first, as on the wire): ``ok`` or the refusal code."""
+    try:
+        with srv.kernel.spine._lock:
+            srv._op_door_ask(BRAIN, {"area": "memory", "verb": verb, "person": person, "target": ROW, "owner": owner,
+                                     "visibility": visibility, "via": via})
+        return "ok"
+    except Refused as exc:
+        return exc.wire
+
+
+def test_a_memory_row_of_a_member_taken_off_the_roster_is_nobodys_to_change(built):
+    """Review round 4 (#2707): the kernel keeps a member taken off people.json in its people map while a record names them (so
+    it can be forgotten), ``decide`` checks only who ASKS, and the door checked the row's OWNER against that map. So an adult
+    could still correct a former member's private row, and any member their household row. Through the real daemon build:
+    every ask the table allowed while the member was on the roster is ``unknown_person`` once they are off it (remember,
+    correct, approve; an adult on a private row, anyone on a household one), what it refused stays refused, and back on the
+    roster their rows are changed as before.
+
+    FORGETTING still reaches them. ``memory.forget`` is told AFTER production has erased (the kernel can neither delay nor
+    stop an erase): for a former member's row the kernel's answer is the same ``unknown_person``, which for that verb only
+    means the record says OBJECTED and names nobody but the asker; the erase stands. And the kernel's own whole-person forget
+    of the former member still works.
+
+    Control run: ``owner not in acting`` put back to ``owner not in people`` in ``door.Door.ask`` -> an adult's correction
+    of the former member's private row is ``ok`` again and this fails."""
+    daemon, k, srv, path = built
+    everyone = [{"id": OWNER, "role": "adult"}, {"id": ADULT2, "role": "adult"}, {"id": KID, "role": "child", "guardians": [OWNER]},
+                {"id": KID2, "role": "child", "guardians": [OWNER]}]
+    asks = [(verb, who, visibility, via) for verb in VERBS for visibility in ("household", "private")
+            for who, via in ((OWNER, None), (ADULT2, None), (KID2, None), ("kiosk-1", "panel"))]
+
+    def answers() -> dict:
+        return {a: _ask(srv, a[0], a[1], owner=KID, visibility=a[2], via=a[3]) for a in asks}
+
+    write(path, everyone)
+    assert _ask(srv, memory_door.REMEMBER, KID, owner=KID, visibility="private") == "ok"          # a record names them
+    on_the_roster = answers()
+    were_allowed = {a for a in asks if on_the_roster[a] == "ok"}
+    assert were_allowed == {(verb, who, visibility, None) for verb in VERBS for who, visibility in (
+        (OWNER, "private"), (ADULT2, "private"), (OWNER, "household"), (ADULT2, "household"), (KID2, "household"))}
+    write(path, [person for person in everyone if person["id"] != KID])                           # KID taken off the file
+    assert _ask(srv, memory_door.CORRECT, OWNER, owner=OWNER, visibility="private") == "ok"       # the file is re-read here
+    assert KID in k.grants.people and KID not in srv.roster                                       # kept (forgettable), off it
+    refusals = k.spine.refusals
+    off_the_roster = answers()
+    for a in asks:
+        assert off_the_roster[a] == (door.UNKNOWN_PERSON if a in were_allowed else on_the_roster[a]), a
+    assert "ok" not in off_the_roster.values() and k.spine.refusals == refusals + len(asks)      # refusals recorded, not errors
+    assert off_the_roster[(memory_door.FORGET, OWNER, "private", None)] == door.UNKNOWN_PERSON    # told afterwards: an objection
+    write(path, everyone)
+    assert answers() == on_the_roster                                                             # back on the roster: as before
+    write(path, [person for person in everyone if person["id"] != KID])
+    assert _ask(srv, memory_door.CORRECT, ADULT2, owner=KID, visibility="private") == door.UNKNOWN_PERSON
+    assert k.spine.forget(KID, actor=KID).count >= 1                                              # and they can still be forgotten

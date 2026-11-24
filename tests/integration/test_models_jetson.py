@@ -318,5 +318,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # LIVE GUARD: this script drives the RUNNING Zoe app (real chat turns, real stores, the real Home Assistant bridge).
+    import sys as _sys
+    if "--live" not in _sys.argv[1:]:
+        print("This script drives the RUNNING Zoe app. Re-run with --live if you mean it.")
+        _sys.exit(2)
+    _sys.argv.remove("--live")
     main()
 
