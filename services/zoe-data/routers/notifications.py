@@ -181,11 +181,33 @@ async def _caller(request: Request):
         return None
 
 
+async def _is_panel(request: Request, caller) -> bool:
+    """Is this request the panel itself (the kiosk: a guest principal that is demonstrably the registered panel - the household
+    lists' "anyone at the panel" rule, ``panel_principal.is_panel_guest``)? Off with ``ZOE_NOTIFICATIONS_PANEL_TOUCH``. Fail closed."""
+    if not _store.touch_enabled():
+        return False
+    try:
+        import panel_principal
+
+        return bool(await panel_principal.is_panel_guest(request, caller))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _require_card(request: Request, caller=Depends(_caller)) -> _prc.Card:
     if not _store.enabled():                         # the flag is read per call: off = as if unmounted, whatever token was minted
         raise HTTPException(status_code=404, detail="Not Found")
+    token = request.headers.get("X-Panel-Card", "")
+    held = _prc.peek(token)
+    if held is not None and held.member_id == _store.PANEL_MEMBER:
+        # the panel's own card (an orb press, nobody identified): honoured for the panel itself, and for nobody else
+        if held.kind != _store.CARD_KIND:
+            raise HTTPException(status_code=404, detail="card_gone")
+        if not await _is_panel(request, caller):
+            raise HTTPException(status_code=403, detail="not_your_card")
+        return held
     try:
-        card = _prc.authorize(request.headers.get("X-Panel-Card", ""), caller)
+        card = _prc.authorize(token, caller)
     except _prc.CardError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.code) from exc
     if card.kind != _store.CARD_KIND:
@@ -201,6 +223,11 @@ class _Act(BaseModel):
 
 @panel_router.post("/act")
 async def panel_act(body: _Act, card: _prc.Card = Depends(_require_card)):
+    if body.action == "clear_all":                   # every row this card's audience may clear, shown or not
+        n = await _store.clear_all(card.member_id)
+        for key in [k for k, v in card.items.items() if v.get("type") == "note"]:
+            card.items.pop(key, None)
+        return {"ok": True, "cleared": n}
     it = card.items.get(str(body.item or ""))
     if it is None:
         raise HTTPException(status_code=404, detail="not on this card")
@@ -210,6 +237,42 @@ async def panel_act(body: _Act, card: _prc.Card = Depends(_require_card)):
         raise HTTPException(status_code=exc.status, detail=exc.code) from exc
     card.items.pop(body.item, None)                  # one decision per row
     return out
+
+
+class _Open(BaseModel):
+    panel_id: str | None = None
+
+
+async def _require_press(request: Request, caller=Depends(_caller)) -> tuple[str, str]:
+    """WHO pressed the orb: ``("member", <their id>)`` for a member's own session, ``("panel", <panel id or "">)`` for the panel
+    itself (``_is_panel``). Anyone else - a guest session that is not the registered panel, a device token, an auth outage - is 403."""
+    if not _store.enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+    if _store._member_session(caller):
+        return "member", str(caller["user_id"])
+    if await _is_panel(request, caller):
+        import panel_principal
+
+        return "panel", str(await panel_principal.panel_of(request, caller) or "")
+    raise HTTPException(status_code=403, detail="not_the_panel")
+
+
+@panel_router.post("/open")
+async def panel_open(body: _Open | None = None, press: tuple[str, str] = Depends(_require_press)):
+    """The orb PRESS: the notifications card as the answer to a tap - no voice turn, nothing spoken, nothing pushed to any other
+    screen. A member's own session gets their own card (all of it). The panel itself (the kiosk guest, nobody identified) gets the
+    household's touch-safe rows in words and one locked row for the rest. ``{"empty": true}`` = nothing to show."""
+    said = str((body.panel_id if body else "") or "").strip()[:64]
+    who, ident = press
+    if who == "member":
+        await _store.refresh(ident)
+        frame = await _store.card(said or f"touch:{ident}", ident, touch=True)
+        if frame:                                    # the press counts as telling them: the spoken tail does not repeat these
+            _store.ANNOUNCED.setdefault(ident, set()).update(r["id"] for r in await _store.unread(ident, limit=50))
+    else:
+        await _store._refresh_household()
+        frame = await _store.panel_card(ident or said or "kiosk")
+    return frame or {"empty": True, "text": "No new notifications."}
 
 
 def register(app: FastAPI) -> bool:

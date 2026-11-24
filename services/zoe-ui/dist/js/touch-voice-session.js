@@ -16,6 +16,7 @@
     'use strict';
     if (window.ZoeVoiceSession) return;
 
+    var TOUCH_CARD_MS = 120000;  // the panel's own list (an orb press, nobody identified) is not left on the wall
     var PIN_CARD_MS = 90000;     // a private card shown on a PIN sign-in (no voice session) fades after this
     var LOCKED_CARD_MS = 20000;  // the privacy-safe card is a hint, not a fixture
     var state = { open: false, member_id: '', display_name: '', badge: 'voice' };
@@ -83,6 +84,7 @@
         cardEl.setAttribute('data-kind', String(d.kind || ''));
         cardEl.setAttribute('data-private', d.private ? '1' : '0');
         if (d.private) cardEl.setAttribute('data-member', String(d.member_id || ''));
+        if (d.touch) cardEl.setAttribute('data-touch', '1');
         var head = el('div', 'zvs-h', null);
         head.appendChild(el('div', 'zvs-t', d.title || ''));
         var close = el('button', 'zvs-x', '×');
@@ -91,7 +93,10 @@
         head.appendChild(close);
         cardEl.appendChild(head);
         if (d.subtitle) cardEl.appendChild(el('div', 'zvs-s', d.subtitle));
-        if (!d.private) {
+        if (!d.private && d.touch && d.card_token && window.ZoeReviewCards) {
+            // The panel's own notifications list (the orb press): no member, rows the server judged safe for the wall.
+            window.ZoeReviewCards.render(cardEl, d);
+        } else if (!d.private) {
             cardEl.appendChild(el('div', 'zvs-b', d.body || ''));
         } else if (d.card_token && window.ZoeReviewCards) {
             // A review card (open loops, the day review): rows with Done / Remind / Keep / "That's me" buttons, drawn by
@@ -110,7 +115,7 @@
         }
         document.body.appendChild(cardEl);
         // A private card under a voice session lives exactly as long as the session; otherwise it fades.
-        if (!d.private) cardTimer = setTimeout(clearCard, LOCKED_CARD_MS);
+        if (!d.private) cardTimer = setTimeout(clearCard, d.touch ? TOUCH_CARD_MS : LOCKED_CARD_MS);
         else if (!state.open) cardTimer = setTimeout(clearCard, PIN_CARD_MS);
     }
 
@@ -153,5 +158,7 @@
     window.ZoeVoiceSession = {
         state: function () { return { open: state.open, member_id: state.member_id, display_name: state.display_name }; },
         clear: function () { state.open = false; state.member_id = ''; clearCard(); renderBadge(); },
+        cardKind: function () { return cardEl ? String(cardEl.getAttribute('data-kind') || '') : ''; },
+        closeCard: clearCard,
     };
 })();

@@ -7,6 +7,11 @@
  * their choices, "Someone new" shows the phone QR (never a text input), Play fetches the clip with the header, Not now sends
  * nothing, another member's card is never drawn and the session closing removes it all.
  * Negative controls: RC_SRC=<mutated copy> (e.g. put the token in the URL, or remove the row before the response) -> red.
+ *
+ * The notifications LIST (the orb press, no voice; docs/knowledge/notifications.md): the panel's own card is drawn with no voice
+ * session, a tap on a row's words opens its screen (or the row's full words), Clear and Clear all go only after the server's yes
+ * and re-read the dot, and the REAL orb block of touch/home.html opens the list on a press when the dot is lit by notifications,
+ * keeps the mic one press away and never opens it on that first press. Each has a planted-mutation control inside this file.
  */
 const fs = require('fs');
 const path = require('path');
@@ -43,10 +48,11 @@ function makeDom() {
   return { document, find };
 }
 
-function boot(responses) {
+function boot(responses, src) {
   const { document, find } = makeDom();
   const listeners = {};
   const calls = [];
+  const emitted = [];
   const played = [];
   const fetch = (url, opts) => {
     calls.push({ url, opts: opts || {} });
@@ -57,19 +63,21 @@ function boot(responses) {
   const window = {
     addEventListener: (t, fn) => { (listeners[t] = listeners[t] || []).push(fn); },
     localStorage: { getItem: () => JSON.stringify({ session_id: 'sess-guest' }) },
+    CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; },
+    dispatchEvent: (ev) => { emitted.push(ev); (listeners[ev.type] || []).forEach((fn) => fn(ev)); },
   };
   function Audio(u) { this.src = u; } Audio.prototype.play = function () { played.push(this.src); };
   const ctx = { window, document, fetch, setTimeout: () => 1, clearTimeout() {}, String, Array, JSON, Date, Promise, Audio,
     encodeURIComponent, URL: { createObjectURL: (b) => 'blob:' + b.blob, revokeObjectURL() {} } };
   vm.createContext(ctx);
-  vm.runInContext(vsSrc, ctx);
-  vm.runInContext(rcSrc, ctx);
+  vm.runInContext((src && src.vs) || vsSrc, ctx);
+  vm.runInContext((src && src.rc) || rcSrc, ctx);
   const fire = (type, detail) => (listeners[type] || []).forEach((fn) => fn({ detail }));
   const btn = (act, item) => find((e) => e.tagName === 'BUTTON' && e.getAttribute('data-act') === act
     && (!item || (e.parentNode && e.parentNode.parentNode && e.parentNode.parentNode.getAttribute('data-item') === item)))[0];
   const choice = (key) => find((e) => e.tagName === 'BUTTON' && e.getAttribute('data-choice') === key)[0];
   const card = () => document.getElementById('zvs-card');
-  return { fire, btn, choice, card, calls, played, find };
+  return { fire, btn, choice, card, calls, played, find, emitted, window };
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
@@ -234,6 +242,167 @@ const LOOPS = { panel_id: P, member_id: 'casey', kind: 'open_loops', private: tr
     await flush(); await flush();
     assert.strictEqual(s.calls[0].url, '/api/panel/cards/act');
   }
+  // ── the notifications LIST: the panel's own card (an orb press, nobody identified) ───────────────────────────────────────
+  const NOTE = '/api/panel/notifications';
+  const done = [{ key: 'done', label: 'Clear' }];
+  const LIST = { panel_id: P, member_id: '', kind: 'notifications', private: false, touch: true, title: 'Notifications',
+    subtitle: 'Press the orb again to talk to me.', card_token: TOKEN, endpoint: NOTE, clear_all: 'Clear all', more: 4, more_label: 'And 4 more.',
+    items: [
+      { id: 'n1', text: 'Pendant battery is low', meta: 'Charge it tonight', open: 'settings', actions: done },
+      { id: 'n2', text: 'Phone alerts are not getting through', meta: 'Zoe cannot warn...', detail: 'Zoe cannot warn your phone until the bot is fixed.', actions: done },
+      { id: 'locked', text: 'Some are private', meta: 'Tap, then say what is up.', open: 'voice', actions: [] },
+    ] };
+  const words = (s, item) => s.find((e) => e.getAttribute('role') === 'button' && e.parentNode && e.parentNode.getAttribute('data-item') === item)[0];
+  const opened = (s) => s.emitted.filter((e) => e.type === 'zoe:card-open').map((e) => e.detail.target);
+  const acted = (s) => s.emitted.filter((e) => e.type === 'zoe:card-acted').length;
+  async function listDraws(src) {                       // no voice session at all: the list is still drawn, with its buttons
+    const s = boot(null, src);
+    s.fire('zoe:voice-card', LIST);
+    assert(s.card() && s.card().textContent.includes('Pendant battery is low') && s.btn('done', 'n1'), 'the list is drawn with no voice');
+    s.fire('zoe:voice-session', { panel_id: P, state: 'closed', member_id: 'casey', reason: 'timeout' });
+    assert(s.card() && s.btn('done', 'n1'), 'a voice session ending does not take the pressed list away');
+    assert.strictEqual(s.window.ZoeVoiceSession.cardKind(), 'notifications');
+  }
+  async function listTaps(src) {                        // a tap on the words does something
+    const s = boot(null, src);
+    s.fire('zoe:voice-card', LIST);
+    words(s, 'n1').click();
+    assert.deepStrictEqual(opened(s), ['settings'], 'a row with a screen opens it');
+    words(s, 'n2').click();
+    assert(s.card().textContent.includes('until the bot is fixed.'), 'a row with no screen opens out to its full words');
+    words(s, 'locked').click();
+    assert.deepStrictEqual(opened(s), ['settings', 'voice'], 'the locked row asks for a voice');
+    assert.strictEqual(s.calls.length, 0, 'opening a row sends nothing');
+  }
+  async function listClears(src) {                      // Clear, then Clear all: rows go after the yes, the dot is re-read
+    const s = boot(null, src);
+    s.fire('zoe:voice-card', LIST);
+    s.btn('done', 'n1').click();
+    await flush(); await flush();
+    assert.strictEqual(s.calls[0].url, NOTE + '/act');
+    assert.strictEqual(s.calls[0].opts.headers['X-Panel-Card'], TOKEN);
+    assert.deepStrictEqual(JSON.parse(s.calls[0].opts.body), { item: 'n1', action: 'done' });
+    assert(!s.card().textContent.includes('Pendant battery is low'), 'cleared row gone');
+    assert.strictEqual(acted(s), 1, 'a cleared row re-reads the dot at once');
+    s.btn('clear_all').click();
+    await flush(); await flush();
+    assert.deepStrictEqual(JSON.parse(s.calls[1].opts.body), { item: '*', action: 'clear_all' });
+    const txt = s.card().textContent;
+    assert(!txt.includes('Phone alerts') && !txt.includes('And 4 more.'), 'clear all takes every clearable row and the hidden ones');
+    assert(txt.includes('Some are private') && txt.includes('Cleared.'), 'the locked row is not cleared by a tap');
+    assert.strictEqual(s.btn('clear_all'), undefined, 'nothing left to clear: the button goes');
+    assert.strictEqual(acted(s), 2);
+  }
+  async function listRefusal(src) {                     // a refused clear keeps everything and says how to get the list back
+    const s = boot(() => ({ status: 403, json: { detail: 'not_your_card' } }), src);
+    s.fire('zoe:voice-card', LIST);
+    s.btn('clear_all').click();
+    await flush(); await flush(); await flush();
+    assert(s.card().textContent.includes('Pendant battery is low') && s.card().textContent.includes('Phone alerts'), 'a refusal clears nothing');
+    assert(s.card().textContent.includes('Press the orb to open the list again.'));
+    assert.strictEqual(acted(s), 0);
+  }
+  for (const fn of [listDraws, listTaps, listClears, listRefusal]) await fn();
+  const red = async (fn, src, what) => {
+    let failed = false;
+    try { await fn(src); } catch (_) { failed = true; }
+    assert(failed, 'negative control did not go red: ' + what);
+  };
+  const plant = (text, a, b) => { assert(text.includes(a), 'control anchor missing: ' + a); return text.replace(a, b); };
+  await red(listDraws, { vs: plant(vsSrc, '!d.private && d.touch && d.card_token', 'false && d.card_token') }, 'a list that needs a voice session');
+  await red(listTaps, { rc: plant(rcSrc, "if (it.open) { emit('zoe:card-open'", "if (false) { emit('zoe:card-open'") }, 'a row tap that does nothing');
+  await red(listClears, { rc: plant(rcSrc, "rows.filter(clearable).forEach(function (row) { if (row.parentNode) row.parentNode.removeChild(row); });", '') }, 'clear all that leaves the rows');
+  await red(listClears, { rc: plant(rcSrc, "if (j && j.note) say(j.note);\n                        emit('zoe:card-acted'", "if (j && j.note) say(j.note);\n                        (function () {})('zoe:card-acted'") }, 'a cleared row that leaves the dot lit');
+  await red(listRefusal, { rc: plant(rcSrc, 'if (!r.ok) return refused(r);\n                    rows.filter(clearable)', 'rows.filter(clearable)') }, 'rows removed before the yes');
+
+  // ── the orb press itself: the REAL block of touch/home.html in a vm ──────────────────────────────────────────────────────
+  function orbBoot(html, inbox, openReply, listIsOpen) {
+    const a = html.indexOf('  var _pullT=null,_dotVoiceOnly=false,_dotNotes=false'), b = html.indexOf('  if(cmdin){', a);
+    assert(a > 0 && b > a, 'orb block not found in home.html');
+    const cls = new Set(); const log = { voice: [], shown: [], fetched: [], zf: [], cards: [], closed: 0 };
+    const listeners = {}; const orbL = {};
+    const classList = { contains: (c) => cls.has(c), add: (c) => cls.add(c), remove: (c) => cls.delete(c),
+      toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); } };
+    const ctx = {
+      orb: { classList, addEventListener: (t, fn) => { orbL[t] = fn; } },
+      cmdbar: { classList: { add() {}, remove() {} } }, cmdin: null, _convLive: false, _orbBusy: false,
+      FULL: { reminder: {}, settings: {} }, CARD: {}, show: (id) => log.shown.push(id), toast() {}, sid: () => 'sess-guest',
+      _panelDevId: () => 'p1', reqSig: () => undefined, AbortSignal: { timeout: () => undefined },
+      panelVoice: (m) => log.voice.push(m || ''), setInterval: () => 1, setTimeout: () => 1, clearTimeout() {}, JSON, String,
+      document: { hidden: false, addEventListener() {} },
+      CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; },
+      fetch: (url) => { log.fetched.push(url); return Promise.resolve({ type: 'opaque' }); },
+      zfetch: (url, opts) => {
+        log.zf.push({ url, opts: opts || {} });
+        const r = url === '/api/proactive/inbox' ? { status: 200, json: inbox } : openReply;
+        return Promise.resolve({ ok: r.status === 200, status: r.status, json: () => Promise.resolve(r.json) });
+      },
+    };
+    ctx.window = { __kiosk: true, addEventListener: (t, fn) => { (listeners[t] = listeners[t] || []).push(fn); },
+      dispatchEvent: (ev) => { if (ev.type === 'zoe:voice-card') log.cards.push(ev.detail); (listeners[ev.type] || []).forEach((fn) => fn(ev)); },
+      ZoeVoiceSession: { cardKind: () => (listIsOpen() ? 'notifications' : ''), closeCard: () => { log.closed += 1; } } };
+    vm.createContext(ctx);
+    vm.runInContext(html.slice(a, b), ctx);
+    const emit = (type, detail) => (listeners[type] || []).forEach((fn) => fn({ detail }));
+    return { log, press: () => orbL.click(), emit, cls };
+  }
+  const FRAME = { status: 200, json: LIST };
+  const opens = (o) => o.log.zf.filter((c) => c.url === NOTE + '/open');
+  async function pressShowsTheList(html) {              // dot lit by notifications: the press shows the list, the mic stays shut
+    for (const inbox of [{ notify_any: true }, { enabled: false, count: 0, notify: 2 }]) {
+      let open = false;
+      const o = orbBoot(html, inbox, FRAME, () => open);
+      await flush(); await flush();
+      assert(o.cls.has('has'), 'the dot is lit');
+      o.press();
+      await flush(); await flush(); await flush();
+      assert.strictEqual(opens(o).length, 1, 'the press asks for the list');
+      assert.strictEqual(opens(o)[0].opts.method, 'POST');
+      assert.deepStrictEqual(o.log.cards, [LIST], 'and the list is shown as the card');
+      assert.deepStrictEqual(o.log.voice, [], 'the mic did not open: nothing has to be said');
+      assert.deepStrictEqual(o.log.fetched, [], 'no spoken pull either');
+      open = true;                                      // the list is on screen: the next press is the mic
+      o.press();
+      await flush();
+      assert.strictEqual(o.log.voice.length, 1, 'the mic is one more press away');
+      assert.strictEqual(opens(o).length, 1);
+    }
+  }
+  async function pressFallsBack(html) {                 // nothing to list / refused / no dot / a selector item: as before
+    let o = orbBoot(html, { notify_any: true }, { status: 200, json: { empty: true } }, () => false);
+    await flush(); await flush(); o.press(); await flush(); await flush(); await flush();
+    assert(o.log.cards.length === 0 && o.log.voice.length === 1, 'an empty list listens');
+    o = orbBoot(html, { notify_any: true }, { status: 403, json: {} }, () => false);
+    await flush(); await flush(); o.press(); await flush(); await flush(); await flush();
+    assert(o.log.voice.length === 1 && /what's up/.test(o.log.voice[0]), 'a refused list asks for a voice');
+    o = orbBoot(html, { enabled: false, count: 0 }, FRAME, () => false);
+    await flush(); await flush(); o.press(); await flush();
+    assert(opens(o).length === 0 && o.log.voice.length === 1, 'no dot: the press listens, as ever');
+    o = orbBoot(html, { enabled: true, count: 1 }, FRAME, () => false);
+    await flush(); await flush(); o.press(); await flush();
+    assert(opens(o).length === 0 && o.log.fetched[0] === 'http://localhost:7777/pull', 'a selector item still pulls aloud');
+  }
+  async function listEventsReachTheEstate(html) {       // a cleared row re-reads the dot; a row tap opens its screen
+    const o = orbBoot(html, { notify_any: true }, FRAME, () => true);
+    await flush(); await flush();
+    const before = o.log.zf.filter((c) => c.url === '/api/proactive/inbox').length;
+    o.emit('zoe:card-acted', { kind: 'notifications' });
+    assert.strictEqual(o.log.zf.filter((c) => c.url === '/api/proactive/inbox').length, before + 1, 'the dot is re-read at once');
+    o.emit('zoe:card-open', { target: 'reminder' });
+    assert.deepStrictEqual(o.log.shown, ['reminder']); assert.strictEqual(o.log.closed, 1, 'the list closes so the screen is seen');
+    o.emit('zoe:card-open', { target: 'voice' });
+    assert.strictEqual(o.log.voice.length, 1);
+    o.emit('zoe:card-open', { target: '/people.html' });
+    assert.deepStrictEqual(o.log.shown, ['reminder'], 'only an estate screen can be opened');
+  }
+  for (const fn of [pressShowsTheList, pressFallsBack, listEventsReachTheEstate]) await fn(homeHtml);
+  await red(pressShowsTheList, plant(homeHtml, "if(free&&!listOpen()&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);",
+    "if(ready&&_dotVoiceOnly)panelVoice('Say \"what\\'s up?\" - I\\'ll check it\\'s you');"), 'the old press (a dot lit by notifications opens the mic)');
+  await red(pressShowsTheList, plant(homeHtml, "else if(ready&&!_dotVoiceOnly&&!listOpen())orbPull();", "else if(ready&&!_dotVoiceOnly)orbPull();")
+    .replace("if(free&&!listOpen()&&(", "if(free&&("), 'a list that swallows the mic for good');
+  await red(listEventsReachTheEstate, plant(homeHtml, "window.addEventListener('zoe:card-acted',function(){_orbPoll();});", ''), 'a dot that stays lit after a clear');
+  await red(listEventsReachTheEstate, plant(homeHtml, "if(!FULL[t]&&!CARD[t])return;", ''), 'a row that can open anything');
+
   const vsAt = homeHtml.indexOf('/js/touch-voice-session.js');
   const rcAt = homeHtml.indexOf('/js/touch-review-cards.js');
   const exAt = homeHtml.indexOf('/js/touch-ui-executor.js');

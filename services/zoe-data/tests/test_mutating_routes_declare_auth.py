@@ -34,6 +34,7 @@ AUTH_DEPENDENCIES = frozenset({
     "_validate_device_token", "_require_multica_webhook_secret", "require_member_panel_or_jukebox",
     "require_phone_device", "require_pairing_code",
     "_require_card",  # routers/panel_review_cards: the X-Panel-Card token, honoured only for its member's open voice session or own session
+    "_require_press",  # routers/notifications /open (the orb press): a member's own session, or the panel itself (is_panel_guest); else 403
 })
 
 # (file, handler) -> why it authenticates without a declared dependency.

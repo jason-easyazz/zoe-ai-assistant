@@ -16,6 +16,11 @@
  * routes (`endpoint`, e.g. /api/panel/memories), a reply with `keep` leaves the row on screen (That's wrong -> "say it", Where's
  * this from -> the answer under the row), `phone_hint` words the phone QR, `soft` rows (what Zoe worked out herself) are dimmed,
  * and `more_label` says what only the phone shows. A person is forgotten only behind a fresh PIN (`pin_needed`).
+ *
+ * The notifications card (the orb press, ZOE_NOTIFICATIONS): a row with `open` is a button - a tap on its words fires
+ * `zoe:card-open` {target} and the estate opens that screen (or the mic for "voice"); a row with `detail` opens out to its full
+ * words; `clear_all` adds one button that clears every row the card may clear. Every act the server accepted fires
+ * `zoe:card-acted`, so the orb's dot is re-read at once. A `touch` card was opened by a press, so a refusal says to press again.
  */
 (function () {
     'use strict';
@@ -26,6 +31,15 @@
     var PIN_FIRST = 'Unlock with your PIN first, then tap it again.';
     var CURATED = 'A grown-up added that one, so only they can change it.';
     var PHONE_DEFAULT = 'Scan with your phone to name them on the Pendant page.';
+    var PRESS_AGAIN = 'Press the orb to open the list again.';
+
+    function emit(name, detail) {
+        try {
+            if (typeof window.dispatchEvent === 'function' && typeof window.CustomEvent === 'function') {
+                window.dispatchEvent(new window.CustomEvent(name, { detail: detail }));
+            }
+        } catch (_) { /* a card never breaks on a missing listener */ }
+    }
 
     function el(tag, cls, text) {
         var n = document.createElement(tag);
@@ -65,6 +79,9 @@
             '#zvs-card .zrc-b[data-act=done],#zvs-card .zrc-b[data-act=keep],#zvs-card .zrc-b[data-act=me]{' +
             'background:var(--accent,#7b96ff);border-color:transparent;color:#fff}' +
             '#zvs-card .zrc-r[data-busy] .zrc-b{opacity:.5;pointer-events:none}' +
+            '#zvs-card .zrc-tap{cursor:pointer;min-height:48px}' +
+            '#zvs-card .zrc-tap .zvs-rt::after{content:" \\203A";color:var(--ink-faint,rgba(244,246,250,.48))}' +
+            '#zvs-card .zrc-all{margin-top:12px}' +
             '#zvs-card .zrc-r.zrc-soft .zvs-rt{opacity:.72;font-style:italic}' +
             '#zvs-card .zrc-d{display:block;font-size:16px;color:var(--ink,#F4F6FA);margin-top:4px}' +
             '#zvs-card .zrc-qr{width:176px;height:176px;border-radius:12px;background:#fff;padding:6px}' +
@@ -92,7 +109,18 @@
             row.setAttribute('data-item', String(it.id));
             var main = el('div', '', null);
             main.appendChild(el('span', 'zvs-rt', it.text || ''));
-            if (it.meta) main.appendChild(el('span', 'zrc-m', it.meta));
+            var metaEl = it.meta ? el('span', 'zrc-m', it.meta) : null;
+            if (metaEl) main.appendChild(metaEl);
+            if (it.open || it.detail) {
+                // touch second: the row's words are a button - open the matching screen, or open the row out to its full words
+                main.className = 'zrc-tap';
+                main.setAttribute('role', 'button');
+                main.setAttribute('data-open', String(it.open || 'detail'));
+                main.addEventListener('click', function () {
+                    if (it.open) { emit('zoe:card-open', { target: String(it.open), kind: String(d.kind || '') }); return; }
+                    if (metaEl) metaEl.textContent = String(it.detail);
+                });
+            }
             row.appendChild(main);
             var bar = el('div', 'zrc-acts', null);
             var sub = el('div', 'zrc-sub', null);
@@ -108,13 +136,44 @@
             card.appendChild(row);
             rows.push(row);
         });
-        if (d.more > 0 && d.more_label) card.appendChild(el('div', 'zvs-s', d.more_label));
+        var moreEl = (d.more > 0 && d.more_label) ? el('div', 'zvs-s', d.more_label) : null;
+        if (moreEl) card.appendChild(moreEl);
+        var allBtn = null;
+        if (d.clear_all && rows.length) {
+            allBtn = el('button', 'zrc-b zrc-all', d.clear_all);
+            allBtn.setAttribute('data-act', 'clear_all');
+            allBtn.addEventListener('click', clearAll);
+            card.appendChild(allBtn);
+        }
         card.appendChild(note);
 
         function gone(row) {
             if (row.parentNode) row.parentNode.removeChild(row);
             rows = rows.filter(function (r) { return r !== row; });
             if (!rows.length) note.textContent = 'All done.';
+            if (allBtn && allBtn.parentNode && !rows.some(clearable)) { allBtn.parentNode.removeChild(allBtn); allBtn = null; }
+        }
+        function clearable(row) {
+            var bar = row.children[1];
+            return Array.prototype.some.call(bar ? bar.children : [], function (b) { return b.getAttribute('data-act') === 'done'; });
+        }
+        // ONE tap for the lot: the server clears every row this card may clear (the ones that did not fit included) and only
+        // then do the rows go; a refusal keeps them all.
+        function clearAll() {
+            if (!allBtn) return;
+            allBtn.setAttribute('disabled', '1');
+            fetch(base + '/act', { method: 'POST', headers: headers(d.card_token, true), body: JSON.stringify({ item: '*', action: 'clear_all' }) })
+                .then(function (r) {
+                    if (allBtn) allBtn.removeAttribute('disabled');
+                    if (!r.ok) return refused(r);
+                    rows.filter(clearable).forEach(function (row) { if (row.parentNode) row.parentNode.removeChild(row); });
+                    rows = rows.filter(function (row) { return !clearable(row); });
+                    if (moreEl && moreEl.parentNode) { moreEl.parentNode.removeChild(moreEl); moreEl = null; }
+                    if (allBtn && allBtn.parentNode) { allBtn.parentNode.removeChild(allBtn); allBtn = null; }
+                    say(rows.length ? 'Cleared.' : 'All cleared.');
+                    emit('zoe:card-acted', { kind: String(d.kind || '') });
+                })
+                .catch(function () { if (allBtn) allBtn.removeAttribute('disabled'); say(FAILED); });
         }
         function say(text) { note.textContent = text || ''; }
 
@@ -122,7 +181,8 @@
             return r.json().then(function (j) { return (j && j.detail) || ''; }, function () { return ''; }).then(function (detail) {
                 if (r.status === 403 && detail === 'pin_needed') say(PIN_FIRST);
                 else if (r.status === 409 && detail === 'curated') say(CURATED);
-                else say(r.status === 403 || r.status === 404 ? AGAIN : FAILED);
+                else if (r.status === 403 || r.status === 404) say(d.touch ? PRESS_AGAIN : AGAIN);
+                else say(FAILED);
             });
         }
         function send(it, action, choice, row, sub) {
@@ -140,6 +200,7 @@
                             gone(row);
                         }
                         if (j && j.note) say(j.note);
+                        emit('zoe:card-acted', { kind: String(d.kind || '') });
                     });
                 })
                 .catch(function () { row.removeAttribute('data-busy'); say(FAILED); });

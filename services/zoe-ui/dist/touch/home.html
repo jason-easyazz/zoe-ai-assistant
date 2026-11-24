@@ -4365,11 +4365,11 @@
   // ONE notifications card (js/touch-review-cards.js), which the orb press / "what's up?" pushes to this panel - opened from here the same way.
   function wireSetNotes(){var s0=sessKey();
     Promise.all([apiGet('/api/notifications/pending'),apiGet('/api/proactive/inbox').catch(function(){return null;})]).then(function(r){
-      var ns=(r[0]&&r[0].notifications)||[],card=!!(r[1]&&('notify' in r[1]));
+      var ns=((r[0]&&r[0].notifications)||[]).filter(function(n){return !/^reminder_(created|snoozed|acknowledged)$/.test(String(n.type||''));}),card=!!(r[1]&&('notify' in r[1]));
       if(!ns.length){_setLine('setNote','<div class="srow2"><span>No new notifications</span></div>',s0);return;}
       _setLine('setNote',ns.map(function(n){return '<div class="srow2"><span>'+esc(n.title||'Notification')
           +(n.message?' <small style="color:var(--ink-soft)">'+esc(String(n.message).slice(0,120))+'</small>':'')+'</span></div>';}).join('')
-        +(card?'<div class="srow2"><span>Done, That’s me and the rest are on the card</span><button class="sbtn" data-act="notecard">Show the card</button></div>'
+        +(card?'<div class="srow2"><span>Clear, That’s me and the rest are on the card</span><button class="sbtn" data-act="notecard">Show the card</button></div>'
           :'<div class="srow2"><span class="lderr">The notifications card isn’t switched on here.</span></div>'),s0);
     }).catch(function(e){_setErr('setNote','notifications',e,s0);});
   }
@@ -4496,7 +4496,7 @@
       var act=e.target.closest('[data-act]');
       if(act){var a=act.getAttribute('data-act');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();
         if(a==='pendlink')panelVoice('Say “Zoe, link my pendant” with it in your hand');
-        if(a==='notecard')orbPress('Say “what’s up?” and I’ll show them here');
+        if(a==='notecard')orbPress('Nothing new — say “what’s up?” to hear the rest');
         return;}
       if(e.target.closest('#setOut')){var out=e.target.closest('#setOut');out.disabled=true;
         function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e2){}try{sessionStorage.removeItem('zoe_gb');}catch(e2){}}
@@ -5300,7 +5300,32 @@
   // guest. That press opens the mic instead - a verified voice asking "what's up?" opens the member's own short session.
   // The same holds for a member whose dot is lit by notifications alone (the proactive selector reports nothing): /pull would be
   // refused, so that press opens the verified listen too. Only a selector-reported item uses /pull.
-  var _pullT=null,_dotVoiceOnly=false;
+  // The press that needs NO voice (owner, 2026-11-24): a dot lit by notifications opens the LIST - POST /api/panel/notifications/open
+  // answers the card itself (a member session: their own; the kiosk: the household's wall-safe rows + one locked row), drawn by the
+  // same js/touch-review-cards.js. Nothing is spoken and no mic opens. The mic stays one press away: with the list open, or with no
+  // dot, the press listens as ever. Nothing to list (or a refusal) falls back to the listen.
+  var _pullT=null,_dotVoiceOnly=false,_dotNotes=false,_orbPoll=function(){};
+  function orbList(idlePrompt){
+    if(_convLive||_orbBusy)return;
+    _orbBusy=true;orb.classList.add('busy');
+    function listen(refused){panelVoice(refused?'Say "what\'s up?" - I\'ll check it\'s you':(idlePrompt||'Nothing new — ask Zoe anything'));}
+    zfetch('/api/panel/notifications/open',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({panel_id:_panelDevId()})},8000)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(d){orb.classList.remove('busy');_orbBusy=false;
+        if(d&&d.card_token&&d.items&&d.items.length){window.dispatchEvent(new CustomEvent('zoe:voice-card',{detail:d}));return;}
+        if(d)_orbPoll();
+        listen(!d);})
+      .catch(function(){orb.classList.remove('busy');_orbBusy=false;listen(true);});
+  }
+  function listOpen(){return !!(window.ZoeVoiceSession&&window.ZoeVoiceSession.cardKind&&window.ZoeVoiceSession.cardKind()==='notifications');}
+  // A tap on a row of the list: open its screen (the list closes so the screen is seen), or the mic when only a voice can open it.
+  window.addEventListener('zoe:card-open',function(e){var t=String((e&&e.detail&&e.detail.target)||'');
+    if(t==='voice'){panelVoice('Say "what\'s up?" - I\'ll check it\'s you');return;}
+    if(!FULL[t]&&!CARD[t])return;
+    if(window.ZoeVoiceSession&&window.ZoeVoiceSession.closeCard)window.ZoeVoiceSession.closeCard();
+    show(t);});
+  // A row cleared (or answered): the dot is re-read now, not at the next minute's poll.
+  window.addEventListener('zoe:card-acted',function(){_orbPoll();});
   function orbPull(){
     if(_convLive||_orbBusy)return;
     _orbBusy=true;
@@ -5321,9 +5346,9 @@
   }
   // ONE press path: the orb, and Settings › Notifications "Show the card" (with its own prompt when there is no dot to collect).
   function orbPress(idlePrompt){
-    var ready=orb.classList.contains('has')&&!orb.classList.contains('busy')&&!orb.classList.contains('listening');
-    if(ready&&_dotVoiceOnly)panelVoice('Say "what\'s up?" - I\'ll check it\'s you');
-    else if(ready)orbPull();
+    var free=!orb.classList.contains('busy')&&!orb.classList.contains('listening'),ready=free&&orb.classList.contains('has');
+    if(free&&!listOpen()&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);
+    else if(ready&&!_dotVoiceOnly&&!listOpen())orbPull();
     else panelVoice(idlePrompt||'Listening — ask Zoe anything');
   }
   orb.addEventListener('click',function(){orbPress();});
@@ -5333,16 +5358,18 @@
   // `notify` (ZOE_NOTIFICATIONS) is the member's unread household notifications: the same dot; the press shows them as a card.
   // `notify_any` (the kiosk poll) is a bare boolean: someone in the house has a non-private one waiting - never a count or whose.
   (function(){
-    function paint(on,review,voiceOnly){_dotVoiceOnly=!!(on&&voiceOnly);orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
+    function paint(on,review,voiceOnly,notes){_dotVoiceOnly=!!(on&&voiceOnly);_dotNotes=!!(on&&notes);orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
     function poll(){
       var s=sid();if(!s){paint(false,false);return;}
       zfetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
         .then(function(r){return r.ok?r.json():null;})
         .then(function(d){var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));
           var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);
-          paint(mine||!!(d&&!d.quiet&&d.notify_any===true),!!(d&&d.review===true&&!d.quiet),!pullable);})
+          var any=!!(d&&!d.quiet&&d.notify_any===true);
+          paint(mine||any,!!(d&&d.review===true&&!d.quiet),!pullable,any||!!(d&&!d.quiet&&d.notify>0));})
         .catch(function(){});
     }
+    _orbPoll=poll;
     poll();setInterval(poll,60000);
     document.addEventListener('visibilitychange',function(){if(!document.hidden)poll();});
   })();
@@ -5520,8 +5547,8 @@
 })();
 </script>
 <script src="/js/touch-event-detail.js?v=ed-3"></script>
-<script src="/js/touch-voice-session.js?v=vs-2"></script>
-<script src="/js/touch-review-cards.js?v=rc-2"></script>
+<script src="/js/touch-voice-session.js?v=vs-3"></script>
+<script src="/js/touch-review-cards.js?v=rc-3"></script>
 <script src="/js/touch-voice-enroll.js?v=ve-1"></script>
 <script src="/js/touch-ui-executor.js?v=estate-11-panel-target"></script>
 </body>

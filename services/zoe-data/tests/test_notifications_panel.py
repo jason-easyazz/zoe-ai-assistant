@@ -209,30 +209,29 @@ def test_flag_off_the_inbox_is_unchanged(env, monkeypatch):
 def test_home_paints_the_existing_dot_for_notify():
     html = (SVC.parents[1] / "services/zoe-ui/dist/touch/home.html").read_text()
     assert "var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));" in html
-    assert "paint(mine||!!(d&&!d.quiet&&d.notify_any===true)," in html
+    assert "var any=!!(d&&!d.quiet&&d.notify_any===true);" in html and "paint(mine||any," in html
     assert "notifications-panel.js" not in html                                       # desktop's bell never loads on the estate
 
 
-def test_a_guest_dot_press_opens_the_mic_never_the_voiceless_pull_and_control():
-    """``notify_any`` alone proves no one: /pull carries no voice, so the server refuses the guest and the dot could never be read.
-    The press must open the mic (a verified voice opens the member's session); only a member's own dot runs orbPull."""
+def test_a_notifications_dot_press_opens_the_list_never_the_voiceless_pull_and_control():
+    """``notify_any`` alone proves no one and /pull carries no voice, so the voiceless pull is refused for a dot lit by notifications
+    alone. Since 2026-11-24 that press opens the LIST (POST /api/panel/notifications/open, no mic); only a selector-reported item
+    pulls aloud. Behaviour is pinned in dist/test_touch_review_cards.js (the real orb block in a vm); this pins the wiring."""
     html = (SVC.parents[1] / "services/zoe-ui/dist/touch/home.html").read_text()
     paint = html[html.index("function paint(on,review"):]
     paint = paint[:paint.index("}")]
-    assert "_dotVoiceOnly=!!(on&&voiceOnly)" in paint                                  # set on every paint, cleared with the dot
-    assert "var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);" in html and ",!pullable);" in html
-    # voice-only = nothing the proactive selector reports: the guest's notify_any AND a member's notifications-only dot, because
-    # the voiceless /pull is refused for both
+    assert "_dotVoiceOnly=!!(on&&voiceOnly)" in paint and "_dotNotes=!!(on&&notes)" in paint   # set on every paint, cleared with the dot
+    assert "var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);" in html and ",!pullable,any||" in html
     # ONE press path (orbPress): the orb and Settings > Notifications "Show the card" both run it
     assert "orb.addEventListener('click',function(){orbPress();});" in html
     click = html[html.index("function orbPress(idlePrompt){"):]
     click = click[:click.index("\n  }")]
-    guest, member = click.index("if(ready&&_dotVoiceOnly)panelVoice("), click.index("else if(ready)orbPull();")
-    assert guest < member                                                              # the guest branch wins before any pull
-    assert click.count("orbPull()") == 1                                               # control: a member's own dot still pulls
+    lst, pull = click.index("orbList(idlePrompt);"), click.index("else if(ready&&!_dotVoiceOnly&&!listOpen())orbPull();")
+    assert lst < pull                                                                  # the list wins before any pull
+    assert click.count("orbPull()") == 1                                               # control: a selector item still pulls
+    assert "'/api/panel/notifications/open'" in html
 
 
-# -- the card + taps -----------------------------------------------------------------------------------------------------------
 def _fake_repass(monkeypatch, *, confirmed=0, props=("p1",), confirm_status="confirmed"):
     state = {"props": list(props), "confirmed": [], "rejected": []}
 
@@ -300,7 +299,7 @@ def test_proposal_lines_reach_only_the_members_own_panel_card(env, monkeypatch, 
     ((panel, event, frame),) = env.pushed
     assert panel == PANEL and event == "voice_card" and frame["member_id"] == MEMBER and frame["private"] is True
     assert LINE in frame["items"][0]["meta"]
-    assert [a["key"] for a in frame["items"][0]["actions"]] == ["me", "not_me"]
+    assert [a["key"] for a in frame["items"][0]["actions"]] == ["me", "not_me", "clear"]
     assert LINE not in caplog.text
     # an unverified voice / guest turn: no card, no count (control is the call above)
     env.pushed.clear()
@@ -549,3 +548,167 @@ def test_the_runtime_health_tick_runs_the_sync():
            if isinstance(n, ast.AsyncFunctionDef)}
     assert "await _sync_alerting_notice()" in fns["_runtime_health_refresh_loop"]
     assert "sync_alerting_broken()" in fns["_sync_alerting_notice"]
+
+
+# -- the orb press with no voice: the list, clear that stays cleared, a tap that opens something (owner, 2026-11-24) ----------------
+GUEST = {"user_id": "guest", "role": "guest"}
+
+
+def _raw(env, nid, member, type_, title="T", message="M", data="{}", delivered=0):
+    env.conn.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                     (nid, member, type_, title, message, data, delivered, datetime.now(timezone.utc).isoformat()))
+    env.conn.commit()
+
+
+def _client(monkeypatch, caller, *, at_panel):
+    """The card routes with ``caller`` as the request's principal; ``at_panel`` = is the request the registered panel itself."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import panel_principal
+    from routers import notifications as rn
+
+    async def is_panel_guest(request, user, db=None, *, mode=None):
+        return bool(at_panel) and panel_principal.is_guest_id((user or {}).get("user_id"))
+
+    async def panel_of(request, user, db=None):
+        return PANEL if at_panel else ""
+    monkeypatch.setattr(panel_principal, "is_panel_guest", is_panel_guest)
+    monkeypatch.setattr(panel_principal, "panel_of", panel_of)
+    app = FastAPI()
+    assert rn.register(app) is True
+    app.dependency_overrides[rn._caller] = lambda: caller
+    return TestClient(app)
+
+
+def test_receipts_never_light_the_dot_or_fill_the_card_and_control(env):
+    from routers import proactive as r
+    for i, t in enumerate(ns.RECEIPT_TYPES * 20):                                      # 60 "reminder created / snoozed / done" echoes
+        _raw(env, f"r{i}", MEMBER, t, "Reminder Created", "Reminder added: water the fern")
+    assert run(ns.unread_count(MEMBER)) == 0 and run(ns.unread(MEMBER)) == []
+    assert run(r.pending_inbox({"user_id": MEMBER, "role": "user"}))["notify"] == 0
+    assert run(r.pending_inbox(GUEST))["notify_any"] is False
+    assert run(ns.card(PANEL, MEMBER)) is None
+    _raw(env, "due", MEMBER, "reminder", "Reminder", "water the fern")                 # control: a reminder that FIRED is a notification
+    assert run(ns.unread_count(MEMBER)) == 1 and run(r.pending_inbox(GUEST))["notify_any"] is True
+
+
+def test_the_press_shows_the_panel_the_wall_safe_rows_without_a_voice_and_controls(env, monkeypatch):
+    _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    _raw(env, "r1", OTHER, "reminder", "Reminder", "collect the purple parcel")       # a member's own words: never on the wall
+    _raw(env, "s1", MEMBER, "omi_health", "Pendant", "private pendant line", json.dumps({"sensitive": True}))
+    c = _client(monkeypatch, GUEST, at_panel=True)
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": "x"}).json()
+    texts = json.dumps(frame)
+    assert [it["id"] for it in frame["items"]] == ["n1", "locked"] and frame["touch"] is True and frame["private"] is False
+    assert "battery is low" in texts and frame["items"][0]["open"] == "settings"
+    assert "purple parcel" not in texts and "private pendant line" not in texts        # locked, and sensitive not even counted
+    assert MEMBER not in texts and OTHER not in texts and frame["member_id"] == ""     # never whose
+    assert frame["items"][1]["open"] == "voice" and frame["items"][1]["actions"] == []
+    assert env.pushed == []                                                            # answered to the press, pushed to no screen
+    # controls: the same press from a guest session that is NOT the panel, and with the touch flag off
+    assert _client(monkeypatch, GUEST, at_panel=False).post("/api/panel/notifications/open", json={}).status_code == 403
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "off")
+    assert _client(monkeypatch, GUEST, at_panel=True).post("/api/panel/notifications/open", json={}).status_code == 403
+
+
+def test_a_clear_from_the_panel_stays_cleared_and_controls(env, monkeypatch):
+    from routers import proactive as r
+    _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    c = _client(monkeypatch, GUEST, at_panel=True)
+    frame = c.post("/api/panel/notifications/open", json={}).json()
+    h = {"X-Panel-Card": frame["card_token"]}
+    # control: the same token and tap from somewhere that is not the panel is refused and clears nothing
+    away = _client(monkeypatch, GUEST, at_panel=False)
+    assert away.post("/api/panel/notifications/act", json={"item": "n1", "action": "done"}, headers=h).status_code == 403
+    assert env.rows("SELECT delivered FROM notifications")[0][0] == 0
+    with pytest.raises(prc.CardError):                                                 # and no other card route honours a panel token
+        prc.authorize(frame["card_token"], {"user_id": MEMBER, "role": "user"})
+    c = _client(monkeypatch, GUEST, at_panel=True)
+    assert c.post("/api/panel/notifications/act", json={"item": "n1", "action": "done"}, headers=h).json() == {"ok": True}
+    assert env.rows("SELECT delivered, action_taken FROM notifications")[0] == (1, "done_panel")
+    # ... and it STAYS cleared: a reload (a fresh press), the dot's poll, the member's own count, the same creator running again
+    assert c.post("/api/panel/notifications/open", json={}).json().get("empty") is True
+    assert run(r.pending_inbox(GUEST))["notify_any"] is False
+    assert run(r.pending_inbox({"user_id": MEMBER, "role": "user"}))["notify"] == 0
+    env.conn.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered) VALUES ('h1', ?, 'omi_health', 'P', 'M', '{}', 0) "
+                     "ON CONFLICT (id) DO NOTHING", (MEMBER,))
+    assert run(ns.unread_count(MEMBER)) == 0
+
+
+def test_a_cleared_voice_ask_is_not_asked_again_when_the_batch_only_shrinks_and_control(env, monkeypatch):
+    state = _fake_repass(monkeypatch, props=("p1", "p2"))
+    nid = run(ns.notify_wearer_proposals(MEMBER))
+    assert nid and run(ns.mark_read(MEMBER, nid, "later"))                             # the member cleared the ask ("Not now")
+    state["props"].remove("p1")                                                        # one proposal expired: a different batch hash
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None
+    assert run(ns.unread_count(MEMBER)) == 0                                           # cleared stays cleared
+    state["props"].append("p9")                                                        # control: a voice never asked about IS asked
+    assert run(ns.notify_wearer_proposals(MEMBER)) and run(ns.unread_count(MEMBER)) == 1
+
+
+def test_not_now_clears_the_voice_ask_and_leaves_the_proposals_undecided(env, monkeypatch):
+    state = _fake_repass(monkeypatch)
+    run(ns.notify_wearer_proposals(MEMBER))
+    frame = run(ns.card(PANEL, MEMBER))
+    assert [a["key"] for a in frame["items"][0]["actions"]] == ["me", "not_me", "clear"]
+    item = prc._CARDS[frame["card_token"]].items["w1"]
+    assert run(ns.act(MEMBER, item, "clear")) == {"ok": True}
+    assert run(ns.unread_count(MEMBER)) == 0 and state["props"] == ["p1"] and not state["confirmed"] and not state["rejected"]
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None                             # the creator's next pass does not bring it back
+
+
+def test_clear_all_takes_the_rows_that_did_not_fit_and_only_the_cards_own_and_controls(env, monkeypatch):
+    _fake_repass(monkeypatch)
+    run(ns.notify_wearer_proposals(MEMBER))
+    seed(12)
+    seed(2, member=OTHER)
+    _raw(env, "rc", MEMBER, "reminder_created", "Reminder Created", "Reminder added: x")
+    c = _client(monkeypatch, {"user_id": MEMBER, "role": "user"}, at_panel=False)
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()   # the member's own session: their own card
+    assert frame["private"] is True and frame["member_id"] == MEMBER and frame["more"] == 5 and frame["clear_all"] == "Clear all"
+    out = c.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers={"X-Panel-Card": frame["card_token"]})
+    assert out.json() == {"ok": True, "cleared": 13}                                   # all 12, shown or not, and the old receipt
+    assert run(ns.unread_count(MEMBER)) == 1                                           # the voice ask wants an answer: not swept up
+    assert env.rows("SELECT type FROM notifications WHERE user_id = ? AND delivered = 0", (MEMBER,)) == [(ns.WEARER_TYPE,)]
+    assert run(ns.unread_count(OTHER)) == 2                                            # control: another member's rows are untouched
+    # the panel's own clear-all: the household's wall-safe rows, never a member's own words
+    _raw(env, "h1", OTHER, "omi_health", "Pendant", "The pendant battery is low.")
+    _raw(env, "r1", OTHER, "reminder", "Reminder", "collect the purple parcel")
+    k = _client(monkeypatch, GUEST, at_panel=True)
+    kf = k.post("/api/panel/notifications/open", json={}).json()
+    assert k.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers={"X-Panel-Card": kf["card_token"]}).json()["cleared"] == 1
+    left = {r[0] for r in env.rows("SELECT id FROM notifications WHERE user_id = ? AND delivered = 0", (OTHER,))}
+    assert "h1" not in left and "r1" in left and len(left) == 3
+
+
+def test_many_sync_notices_are_one_row_and_one_clear_and_control(env):
+    for i in range(5):
+        _raw(env, f"s{i}", MEMBER, "omi_sync", "Pendant synced", f"I've synced {i + 1} recordings from your pendant.")
+    _raw(env, "a", MEMBER, "note", "A", "one")
+    _raw(env, "b", MEMBER, "note", "A", "two")                                         # control: other kinds are never folded
+    frame = run(ns.card(PANEL, MEMBER))
+    sync = [it for it in frame["items"] if it["text"] == "Pendant synced"]
+    assert len(sync) == 1 and "(and 4 earlier)" in sync[0]["meta"] and len(frame["items"]) == 3
+    item = prc._CARDS[frame["card_token"]].items[sync[0]["id"]]
+    assert run(ns.act(MEMBER, item, "done")) == {"ok": True}
+    assert env.rows("SELECT COUNT(*) FROM notifications WHERE type = 'omi_sync' AND delivered = 0")[0][0] == 0
+    assert run(ns.unread_count(MEMBER)) == 2
+
+
+def test_a_tap_on_a_row_names_what_it_opens_and_controls(env):
+    long = "Telegram is refusing the sign-in of the alert bot. " * 4
+    _raw(env, "1", MEMBER, "reminder", "Reminder", "water the fern")
+    _raw(env, "2", MEMBER, "transcript_check", "Transcript check", "A few words need you.")
+    _raw(env, "3", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    _raw(env, "4", MEMBER, "ops_alerting_broken", "Phone alerts are not getting through", long)
+    _raw(env, "5", MEMBER, "note", "Bins", "tonight", json.dumps({"open": "calendar"}))  # a creator may name an estate screen
+    _raw(env, "6", MEMBER, "note", "Odd", "x", json.dumps({"open": "/people.html"}))     # control: anything else is not a target
+    by = {it["text"]: it for it in run(ns.card(PANEL, MEMBER))["items"]}
+    assert by["Reminder"]["open"] == "reminder" and by["Transcript check"]["open"] == "checks" and by["Pendant"]["open"] == "settings"
+    assert by["Bins"]["open"] == "calendar" and "open" not in by["Odd"] and "detail" not in by["Odd"]
+    alert = by["Phone alerts are not getting through"]
+    assert "open" not in alert and len(alert["detail"]) > len(alert["meta"])            # no screen for it: the row opens out instead
+    # the panel's own card cannot open a member's private screen: there the tap asks for a voice
+    wall = {it["text"]: it for it in run(ns.panel_card(PANEL))["items"]}
+    assert wall["Transcript check"]["open"] == "voice" and wall["Pendant"]["open"] == "settings"
+    assert "Reminder" not in wall and "Bins" not in wall and ns.LOCKED_TEXT in wall
