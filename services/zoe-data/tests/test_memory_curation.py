@@ -870,3 +870,55 @@ def test_approving_a_pending_row_that_predates_a_curated_note_cannot_publish_a_c
     ok = run(env.svc.ingest("User likes trains.", user_id=KID, source="chat_regex", status="pending"))
     run(env.svc.review(ok.id, decision="approve", actor=KID))      # control: a non-contradicting pending row is approved as before
     assert env.col.rows[ok.id][1]["status"] == "approved"
+
+
+# ---- #2706: the curator's member (and its erase stamps) is taken when the request ENTERS, not when the member lock came free --
+@pytest.mark.parametrize("verb", ["add", "edit", "forget"])
+def test_the_curator_member_is_taken_before_the_member_lock_is_waited_for(monkeypatch, verb):
+    """The member lock is held (an opt-out, another curator's edit); the curator's call starts and WAITS for it; while it waits,
+    a forget lands (the erase stamps move on). The member the locked step writes with carries the stamps of when the call
+    entered, taken before the wait: a forget that completed during the wait is then seen by the memory door as after the ask.
+    Before this fix the member was built inside the locked helper, after the wait: this fails (no stamp taken while the call
+    waits). Controls run (``controls.py``; each fails this test for its verb): ``memory_curation.py`` put back as it was at
+    e6b7cd96b; in ``add``, ``edit`` and ``forget`` the member
+    built INSIDE the ``async with`` of the member lock (after the wait, as the locked helpers used to build it)."""
+    import kernel_door
+    import memory_actor
+
+    events: list = []
+
+    def stamps_now(*areas):
+        events.append("stamp")
+        return {"taken_at": len(events)}
+
+    monkeypatch.setattr(kernel_door, "stamps_now", stamps_now)
+    handed: list = []
+
+    class _Stop(Exception):
+        pass
+
+    async def locked(*_a, acting=None, **_k):
+        handed.append(acting)
+        raise _Stop
+
+    monkeypatch.setattr(mc, f"_{verb}_locked", locked)
+    monkeypatch.setattr(mc, "_member_locks", {})                  # a lock of this test's own event loop
+    curator = mc.Account(user_id="member-ova", name="Ova", role="admin", kind="adult")
+    args = {"add": ("womble", "other"), "edit": ("row-womble", "womble"), "forget": ("row-womble",)}[verb]
+
+    async def scenario():
+        lock = mc._member_lock("member-kip")
+        await lock.acquire()
+        task = asyncio.create_task(getattr(mc, verb)(None, curator, "member-kip", *args, svc=object()))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not task.done()
+        events.append("forget landed")                            # a forget confirmed while the call waits for the lock
+        lock.release()
+        with pytest.raises(_Stop):
+            await task
+
+    run(scenario())
+    assert events == ["stamp", "forget landed"], events          # the stamp was taken BEFORE the wait
+    assert len(handed) == 1 and isinstance(handed[0], memory_actor.Member)
+    assert handed[0].user_id == "member-ova" and handed[0].stamps == {"taken_at": 1}
