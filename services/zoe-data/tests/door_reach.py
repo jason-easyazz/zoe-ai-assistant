@@ -45,7 +45,7 @@ def reached(run, root: Path, door_file: str) -> set:
         except ValueError:
             return None
         if rel.startswith("tests/"):
-            return None
+            return "<tests>", "<scenario>"                  # a scenario calling the door itself (a named proxy only)
         if rel not in spans:
             spans[rel] = _outer(path)
         for first, last, name in spans[rel]:
