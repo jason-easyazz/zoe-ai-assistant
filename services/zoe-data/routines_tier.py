@@ -447,6 +447,8 @@ async def _one_off(parts: dict, member: str, *, channel: str, write: bool) -> Op
         return "would"
     try:
         out = await rs.add_one_off(member, r["id"], day, parts["line"], created_via=channel)
+    except rs.kernel_door.Refused as exc:                  # the Zoe OS kernel said no (ZOE_OS_ROUTINES=kernel): nothing was added
+        return exc.line()
     except rs.StoreError:
         return None                                        # refused (past day, too many lines): today's reminder path answers
     saved = await rs.live_lines(member, [out["id"]])       # the line and the routine's name re-checked just before saying them

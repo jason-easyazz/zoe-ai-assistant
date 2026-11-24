@@ -1188,6 +1188,9 @@ LOOKUPS_FLAG = "ZOE_OS_LOOKUPS"          # ``kernel`` = a lookup that leaves the
 LOOKUP_DOOR_VERBS = ("lookup.weather", "lookup.web_search", "lookup.web_fetch")
 MESSAGES_FLAG = "ZOE_OS_MESSAGES"        # ``kernel`` = a member asking Zoe to send something asks first (message_door.py)
 MESSAGE_DOOR_VERBS = ("send.panel", "send.telegram", "send.push", "send.external")
+ROUTINES_FLAG = "ZOE_OS_ROUTINES"        # ``kernel`` = a routine's changes ask first; its ticks are told afterwards (routine_door.py)
+ROUTINE_DOOR_VERBS = ("routine.create", "routine.edit", "routine.delete", "routine.edit_given", "routine.delete_given",
+                      "routine.tick", "routine.skip", "routine.snooze", "routine.undo")
 PEOPLE_DOOR_VERBS = ("contact.create", "contact.edit", "contact.delete")
 #: The two ACTION areas (``labs/zoe-os/zoe_os/music_door.py`` / ``home_door.py``; the service doors are ``action_doors``, called
 #: by the one sender of each: ``music_service._ma_response``, ``home_control.send``). Nothing is stored for either. Ids and closed
@@ -1211,7 +1214,8 @@ AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_V
          "home": _Area(HOME_FLAG, None, HOME_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
          "memory": _Area(MEMORY_FLAG, None, MEMORY_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
          "lookups": _Area(LOOKUPS_FLAG, None, LOOKUP_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
-         "messages": _Area(MESSAGES_FLAG, None, MESSAGE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
+         "messages": _Area(MESSAGES_FLAG, None, MESSAGE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
+         "routines": _Area(ROUTINES_FLAG, None, ROUTINE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
 ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
 #                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
 DOOR_QUEUE_MAX = 256
