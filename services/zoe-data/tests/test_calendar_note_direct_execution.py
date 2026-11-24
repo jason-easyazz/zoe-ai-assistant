@@ -384,7 +384,17 @@ async def test_direct_path_is_used(
     assert calls == [(intent_name, slots, "family-admin")]
 
 
-# --- the notes / journal door cannot load: main's answer, None ---------------------------------------------------------------
+# --- the notes / journal door cannot load, or its store cannot be reached ---------------------------------------------------
+
+
+def _opened(db, events):
+    """``get_db_ctx`` that records each time the store is opened (``"store"`` in ``events``) and hands out ``db``."""
+    @contextlib.asynccontextmanager
+    async def ctx():
+        events.append("store")
+        yield db
+
+    return ctx
 
 
 @pytest.mark.asyncio
@@ -392,41 +402,67 @@ async def test_direct_path_is_used(
     ("note_service", _execute_note_create_direct, {"content": "feed the womble"}),
     ("journal_service", _execute_journal_create_direct, {"content": "the womble slept"}),
 ])
-async def test_a_door_that_cannot_be_imported_gives_mains_none_with_both_flags_off(monkeypatch, module, run, slots):
+async def test_a_door_that_cannot_be_imported_gives_mains_none_before_the_store_is_opened(monkeypatch, module, run, slots):
     """With ``ZOE_OS_NOTES`` / ``ZOE_OS_JOURNAL`` off and the door module failing to import, the executor answers ``None``
-    (main's generic handler), writes nothing and raises nothing. It used to raise ``UnboundLocalError``: the refusal clause
-    named the module the failed import never bound. Control run: the separate import guard removed from
-    ``_execute_note_create_direct`` / ``_execute_journal_create_direct`` (the import back inside the write's ``try``) makes
-    this raise ``UnboundLocalError`` for each."""
+    (main's answer), raises nothing, and never opens the store: this PR loads the door before the store is opened, with its
+    own guard. Fails on the PR's base (``feature/zoe-os-notes-2-kernel-area`` 4240fa8a9, where the module is imported inside
+    ``async with get_db_ctx()``): the store is opened first (``events == ["store"]``). Fails on this PR's head before the
+    guard, bd13bdd54: ``UnboundLocalError`` (the ``except note_service.NoteRefused`` / ``journal_service.JournalRefused``
+    clause names the module the failed import never bound). Both runs: the new test file in a scratch checkout of each commit,
+    recorded in ``~/.zoe/agent-tools/stack-round4/calnotes/PROGRESS.md``. Control run: the separate import guard removed (the
+    import back as the first statement of the write's ``try``) raises ``UnboundLocalError`` for each."""
     import sys
 
     for flag in ("ZOE_OS_NOTES", "ZOE_OS_JOURNAL"):
         monkeypatch.delenv(flag, raising=False)
-    db = _FakeDB()
+    db, events = _FakeDB(), []
     _silence_ui(monkeypatch)
-    monkeypatch.setattr("database.get_db_ctx", _fake_db_ctx(db))
+    monkeypatch.setattr("database.get_db_ctx", _opened(db, events))
     monkeypatch.setitem(sys.modules, module, None)          # ``import <module>`` now raises ImportError
 
     assert await run(Intent("note_create" if module == "note_service" else "journal_create", slots), "member-ova") is None
-    assert db.calls == []
+    assert events == [] and db.calls == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("run, slots", [
-    (_execute_note_create_direct, {"content": "feed the womble"}),
-    (_execute_journal_create_direct, {"content": "the womble slept"}),
+@pytest.mark.parametrize("flag, module, run, slots", [
+    ("ZOE_OS_NOTES", "note_service", _execute_note_create_direct, {"content": "feed the womble"}),
+    ("ZOE_OS_JOURNAL", "journal_service", _execute_journal_create_direct, {"content": "the womble slept"}),
 ])
-async def test_a_store_that_cannot_be_reached_still_gives_none(monkeypatch, run, slots):
-    """The other failure the generic handler covers is unchanged: the door loads but the store is unreachable -> ``None``.
-    Control run: the generic ``except Exception`` handler removed from either executor makes this raise."""
-    for flag in ("ZOE_OS_NOTES", "ZOE_OS_JOURNAL"):
-        monkeypatch.delenv(flag, raising=False)
+async def test_with_the_door_on_the_stamps_are_taken_before_the_store_and_an_unreachable_store_still_gives_none(
+        monkeypatch, flag, module, run, slots):
+    """Door on (``ZOE_OS_NOTES`` / ``ZOE_OS_JOURNAL`` = ``kernel``), the store unreachable: the executor took its erase stamps
+    (a real snapshot, the door being on) BEFORE it opened the store, and the unreachable store is still main's ``None``, not
+    a refusal line and not an exception. Fails on the PR's base (4240fa8a9): the executor takes no stamps at all
+    (``events == ["store"]``); recorded with the run above. Control run: ``stamps_at = ...stamps_now()`` moved inside
+    ``async with get_db_ctx()`` makes this fail for each (``["store"]``, the stamp never reached)."""
+    import importlib
+
+    import os_shadow
+
+    for other in ("ZOE_OS_NOTES", "ZOE_OS_JOURNAL"):
+        monkeypatch.delenv(other, raising=False)
+    monkeypatch.setenv(flag, "kernel")
+    door = importlib.import_module(module)
+    events, taken = [], []
+    real = getattr(door, "stamps_now", None)                # (the PR's base has none: its executors never stamp)
+
+    def spy():
+        got = real()
+        taken.append(got)
+        events.append("stamps")
+        return got
+
+    monkeypatch.setattr(door, "stamps_now", spy, raising=False)
+    monkeypatch.setattr(os_shadow, "stamp_snapshot", lambda: {"member-ova": 3})      # memory only; no state directory read
     _silence_ui(monkeypatch)
 
     @contextlib.asynccontextmanager
     async def unreachable():
+        events.append("store")
         raise ConnectionError("no store")
         yield  # pragma: no cover
 
     monkeypatch.setattr("database.get_db_ctx", unreachable)
-    assert await run(Intent("note_create", slots), "member-ova") is None
+    assert await run(Intent("note_create" if module == "note_service" else "journal_create", slots), "member-ova") is None
+    assert events == ["stamps", "store"] and taken == [{"member-ova": 3}]
