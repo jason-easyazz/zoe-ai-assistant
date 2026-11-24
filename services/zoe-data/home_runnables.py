@@ -7,11 +7,14 @@ A ``scene.*`` or ``script.*`` is read from Home Assistant through the bridge's r
   * ``opens``      - it unlocks, opens or disarms one (any service or target state that is not lock / close / stop / arm);
   * ``unreadable`` - Zoe cannot tell: the read failed, timed out or was not found (a bridge without the endpoint answers 404),
     the body has a shape this reader does not know, a target or a service is templated, it calls another script, scene or
-    automation, it targets a group, or it calls a service this reader does not KNOW to act only on the entities it names
-    (a shell command, MQTT, an integration's own service, a call that names no entity at all ...).
+    automation, it targets a group, or it calls a service that is not a (domain, service) PAIR this reader KNOWS to change
+    only the named entity's own state (``home_opening.OWN_STATE_SERVICES``): a shell command, MQTT, an integration's own
+    service, a call that names no entity at all, ``remote.send_command`` (it can transmit the code that opens a garage),
+    ``button.press``, ``media_player.play_media``, ``notify.*``, and any service this list has never heard of on a domain it
+    knows. A scene member of a domain that is not on the list is unreadable too.
 
-The reader is no stricter than the direct command rule in ``home_opening``: a call to a known domain on a named entity that
-is not a lock, an alarm panel, a cover or a valve is ``safe`` here because the same caller may send it directly.
+The pairs are the SAME list the direct command rule in ``home_opening`` uses (``unlisted``): a listed call on a named entity
+is ``safe`` here because the same caller may send it directly, and nothing unlisted is safe on either side.
 
 ``opens`` and ``unreadable`` are both ADULT-ONLY. An ``automation.*`` is always ``unreadable``: no reader is built for one.
 
@@ -28,22 +31,22 @@ from typing import Any, Mapping
 import httpx
 
 from typed_env import env_str
-from home_opening import CLOSING as CLOSING_SERVICES, RUNNABLE_DOMAINS, SECURE_DOMAINS
+from home_opening import CLOSING as CLOSING_SERVICES, OWN_STATE_SERVICES, RUNNABLE_DOMAINS, SECURE_DOMAINS
 
 SAFE, OPENS, UNREADABLE = "safe", "opens", "unreadable"
 #: the services that run one as it is defined. Any other service on one (apply, create, reload ...) is adult-only unread.
 RUN_SERVICES = frozenset({"turn_on", "turn_off", "toggle"})
 CLOSED_STATES = frozenset({"locked", "locking", "closed", "closing"})      # and every ``armed_*`` state of an alarm panel
-#: the ONLY service domains a script's call is read for: each acts on the entity ids the call names and nothing else. Any
-#: other domain (shell_command, mqtt, rest_command, zha, zwave_js, an integration's own, one newer than this list) is unreadable.
-ENTITY_SERVICE_DOMAINS = SECURE_DOMAINS | frozenset({
-    "light", "switch", "fan", "media_player", "climate", "humidifier", "water_heater", "vacuum", "siren", "camera", "remote",
-    "lawn_mower", "button", "number", "select", "text", "timer", "counter", "input_boolean", "input_number", "input_select",
-    "input_text", "input_datetime", "input_button", "homeassistant"})
 #: the generic services that act on the named entities in their own domain; every other ``homeassistant.*`` is unreadable
 GENERIC_SERVICES = frozenset({"turn_on", "turn_off", "toggle", "update_entity"})
-#: service domains that reach no entity, so a call to one may name none
-NO_ENTITY_SERVICE_DOMAINS = frozenset({"notify", "tts", "persistent_notification"})
+#: the only services that reach no entity, so a call to one may name none. ``notify`` is NOT here: a notify target can be a
+#: shell command, MQTT, or a phone that acts on command messages, and this reader cannot see which.
+NO_ENTITY_SERVICES: Mapping[str, frozenset] = {
+    "tts": frozenset({"speak", "clear_cache"}),
+    "persistent_notification": frozenset({"create", "dismiss", "dismiss_all", "mark_read"})}
+#: a scene MEMBER is put into a state by its domain's own services. For these domains only the listed states are known to
+#: carry nothing more (a remote restored to ``on`` may start an activity: a stored command sequence).
+SCENE_MEMBER_STATES: Mapping[str, frozenset] = {"remote": frozenset({"off"})}
 TTL_S, UNREADABLE_TTL_S, READ_TIMEOUT_S, MAX_ENTRIES = 120.0, 20.0, 3.0, 512
 
 _CACHE: dict[str, tuple[str, float]] = {}
@@ -59,14 +62,27 @@ async def _read(entity_id: str) -> Any:
 
 
 def _reads_as_its_targets(service_domain: str, name: str, entity_domain: str) -> bool:
-    """Is this script call one whose whole effect is on the entity it names? Only then can its target decide the verdict."""
+    """Is this script call one whose whole effect is on the entity it names? Only then can its target decide the verdict.
+    Decided per (domain, service) PAIR (``home_opening.OWN_STATE_SERVICES``): a script's data is not seen here, so a service
+    that CAN carry a command, a payload or an address (``remote.send_command``, ``media_player.play_media``, ``button.press``)
+    is unreadable whatever it carries, and so is a service this list has never heard of on a domain it knows."""
+    if service_domain in NO_ENTITY_SERVICES:
+        return name in NO_ENTITY_SERVICES[service_domain]
     if not entity_domain:
-        return service_domain in NO_ENTITY_SERVICE_DOMAINS      # no entity named: an area in a field this never saw, or all of them
-    if service_domain in NO_ENTITY_SERVICE_DOMAINS:
+        return False      # no entity named: an area in a field this never saw, or all of them
+    if entity_domain in SECURE_DOMAINS and service_domain in (entity_domain, "homeassistant"):
+        return service_domain != "homeassistant" or name in GENERIC_SERVICES      # read: closing or opening is decided below
+    if service_domain == "homeassistant":      # the generic call runs the ENTITY's domain service: that pair must be listed
+        own = OWN_STATE_SERVICES.get(entity_domain)
+        return own is not None and (name == "update_entity" or (name in GENERIC_SERVICES and name in own))
+    return service_domain == entity_domain and name in OWN_STATE_SERVICES.get(service_domain, ())
+
+
+def _member_is_read(entity_domain: str, state: str) -> bool:
+    """A scene member with no service: is setting it to this state known to change only that entity?"""
+    if entity_domain in SECURE_DOMAINS:
         return True
-    if service_domain == "homeassistant":      # the generic call runs the ENTITY's domain service: that domain must be known too
-        return name in GENERIC_SERVICES and entity_domain in ENTITY_SERVICE_DOMAINS - {"homeassistant"}
-    return service_domain in ENTITY_SERVICE_DOMAINS
+    return entity_domain in OWN_STATE_SERVICES and state in SCENE_MEMBER_STATES.get(entity_domain, (state,))
 
 
 def classify(body: Any) -> str:
@@ -86,7 +102,7 @@ def classify(body: Any) -> str:
             return UNREADABLE
         if {entity_domain, service_domain} & (RUNNABLE_DOMAINS | {"group"}):
             return UNREADABLE
-        if service and not _reads_as_its_targets(service_domain, name, entity_domain):
+        if not (_reads_as_its_targets(service_domain, name, entity_domain) if service else _member_is_read(entity_domain, state)):
             return UNREADABLE
         if {entity_domain, service_domain} & SECURE_DOMAINS:
             closing = name in CLOSING_SERVICES if service else (state in CLOSED_STATES or state.startswith("armed_"))

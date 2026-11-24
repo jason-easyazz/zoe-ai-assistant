@@ -600,10 +600,27 @@ def _names_a_selector(value: Any, depth: int = 0) -> bool:
     return isinstance(value, list) and any(_names_a_selector(v, depth + 1) for v in value)
 
 
+# What a scene member's stored attributes can make Home Assistant SEND when the scene is applied: a media player restored with
+# a content id is told to play it (an address is fetched by the player), a remote with an activity runs a stored command
+# sequence. zoe-data is given states only, so a member carrying any of these makes the whole scene unreadable.
+_PAYLOAD_KEYS = frozenset({"media_content_id", "activity", "command", "payload", "url", "code"})
+
+
+def _names_a_payload(value: Any, depth: int = 0) -> bool:
+    if depth > 8:
+        raise _Unreadable("data_shape")
+    if isinstance(value, dict):
+        return any(str(k).strip().lower() in _PAYLOAD_KEYS or _names_a_payload(v, depth + 1) for k, v in value.items())
+    return isinstance(value, list) and any(_names_a_payload(v, depth + 1) for v in value)
+
+
 def _scene_state(target: Any) -> str:
     """The state a scene sets one member to, or "" when it is not known. A member given a position that is not 0 is not
-    known to be closed whatever its ``state`` says: Home Assistant moves a cover or a valve to the position."""
+    known to be closed whatever its ``state`` says: Home Assistant moves a cover or a valve to the position. A member whose
+    stored attributes carry a payload (``_PAYLOAD_KEYS``) is not a state at all: the scene is unreadable."""
     if isinstance(target, dict):
+        if _names_a_payload(target):
+            raise _Unreadable("payload")
         for key, value in target.items():
             if "position" in str(key).lower() and (isinstance(value, bool) or not isinstance(value, (int, float)) or value != 0):
                 return ""

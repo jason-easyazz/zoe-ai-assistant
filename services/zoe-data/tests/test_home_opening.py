@@ -371,3 +371,86 @@ async def test_a_refusal_logs_closed_codes_only(house, caplog):
     lines = [r.getMessage() for r in caplog.records if "HOME_OPENING" in r.getMessage()]
     assert lines == ["HOME_OPENING refused via=panel_route domain=lock"]
     assert CHILD not in lines[0] and "front_door" not in lines[0]
+
+
+# ---- review fix 2026-11-24: a directly sent command is a listed (domain, service) pair or it is adult-only -------------------------
+#: every one was sent for the child on the old code (none names a lock, an alarm panel, a cover or a valve)
+UNLISTED = [("remote.den", "send_command", {"command": "womble"}), ("remote.den", "send_command", None), ("remote.den", "learn_command", None),
+            ("remote.den", "turn_on", {"activity": "womble"}), ("remote.den", "turn_on", None), ("remote.den", "toggle", None),
+            ("button.gate", "press", None), ("input_button.gate", "press", None), ("vacuum.den", "send_command", None),
+            ("media_player.den", "play_media", {"media_content_id": "http://relay.invalid/open"}),
+            ("media_player.den", "play_media", {"media_content_id": " //relay.invalid/open"}),
+            ("media_player.den", "play_media", {"media_content_id": ["womble"]}), ("media_player.den", "play_media", None),
+            ("media_player.den", "play_media", {"media_content_id": "womble", "extra": {"x": 1}}),
+            ("light.kitchen_lamp", "turn_on", {"payload": "womble"}), ("light.kitchen_lamp", "turn_on", {"nested": [{"URL ": "womble"}]}),
+            ("light.kitchen_lamp", "some_new_service", None), ("womble.gate", "turn_on", None), ("text.gate_code", "set_value", None),
+            ("light.kitchen_lamp", "turn_on", {"entity_id": ["light.a", "remote.den"]}), ("notify.womble", "send_message", None)]
+#: the named controls: the same domains with a listed service and plain data
+LISTED = [("remote.den", "turn_off", None), ("media_player.den", "media_pause", None), ("media_player.den", "volume_set", {"volume_level": 0.3}),
+          ("media_player.den", "play_media", {"media_content_id": "womble song", "media_content_type": "music"}),
+          ("media_player.den", "play_media", {"media_content_id": "media-source://womble/one"}),
+          ("media_player.den", "play_media", {"media_content_id": "library://track/1"}), ("vacuum.den", "start", None),
+          ("light.kitchen_lamp", "set_brightness", {"brightness_pct": 40}), ("light.kitchen_lamp", "set_color", {"rgb_color": [1, 2, 3]}),
+          ("climate.den", "set_temperature", {"temperature": 21}), ("input_number.den_setpoint", "set_value", {"value": 20})]
+
+
+@pytest.mark.parametrize("entity, action, params", UNLISTED)
+async def test_a_command_that_is_not_a_listed_pair_or_carries_a_payload_is_adult_only(house, entity, action, params):
+    """``remote.send_command`` can transmit the code that opens a garage or a gate; a button press triggers whatever it is
+    wired to; ``play_media`` with an address makes the player fetch it; an unknown service or domain could do anything.
+    Refused at the route and at the brain's tool for everyone but an adult, nothing sent. Fails on the old code (each was
+    sent for the child: the direct rule looked only at the four secure domains).
+    Control run (named): ``LISTED`` in the next test. Control run (code): with ``home_opening.unlisted`` answering False
+    every case is sent for the child."""
+    for caller in NOBODY:
+        with pytest.raises(HTTPException) as exc:
+            await _route(caller or {}, entity, action, params)
+        assert exc.value.status_code == 403 and exc.value.detail == home_opening.REFUSAL
+        home_opening.note_turn(caller)
+        assert (await zoe_agent._ha_control(entity, action, params)).get("status") == "refused"
+    assert house["sent"] == []
+    assert (await _route(MEMBER, entity, action, params))["ok"] is True and len(house["sent"]) == 1
+
+
+async def test_a_listed_pair_with_plain_data_is_still_for_everyone_and_looks_nobody_up(house, monkeypatch, caplog):
+    """The other side: a listed service, words or a library id to play, the bridge's own light actions. Nobody is looked up
+    for one. Control run: with ``home_opening.unlisted`` answering True every one is refused for the child."""
+    async def nobody_is_asked(*a, **k):
+        raise AssertionError("an ordinary command looked somebody up")
+
+    with monkeypatch.context() as only_here:
+        only_here.setattr(home_opening, "may_open", nobody_is_asked)
+        for entity, action, params in LISTED + [(e, a, None) for e, a in ORDINARY + CLOSING]:
+            assert (await _route(KID, entity, action, params))["ok"] is True, (entity, action)
+    assert len(house["sent"]) == len(LISTED + ORDINARY + CLOSING)
+    with caplog.at_level(logging.WARNING, logger="home_opening"):
+        assert await home_opening.refused("remote.den", "send_command", {"command": "womble"}, user=KID, via="panel_route") is True
+    assert [r.getMessage() for r in caplog.records if "HOME_OPENING" in r.getMessage()] == [
+        "HOME_OPENING refused via=panel_route domain=unlisted_service"]
+    assert "womble" not in caplog.text and "remote" not in caplog.text
+
+
+async def test_the_music_sender_asks_too_so_play_an_address_is_adult_only(house):
+    """The spoken music fallback posts ``play_media`` to the bridge with the caller's own words as the content id. It now
+    asks the same door: an address is adult-only, words play for anyone. Fails on the old code (the sender never asked).
+    Control run: with the ``refused`` call dropped from ``intent_router._post_music_ha_control`` the child's address is posted."""
+    import intent_router
+
+    class Client:
+        posted: list = []
+
+        async def post(self, url, json=None):
+            self.posted.append(json["data"]["media_content_id"])
+            return SimpleNamespace(status_code=200)
+
+    def play(what):
+        return {"entity_id": "media_player.den", "action": "play_media", "data": {"media_content_id": what, "media_content_type": "music"}}
+
+    client = Client()
+    panel_principal.record_home_control(True)
+    home_opening.note_turn(KID)
+    assert await intent_router._post_music_ha_control(client, "http://bridge.invalid", play("http://relay.invalid/open")) == home_opening.REFUSAL
+    assert await intent_router._post_music_ha_control(client, "http://bridge.invalid", play("womble song")) is None
+    home_opening.note_turn(MEMBER)
+    assert await intent_router._post_music_ha_control(client, "http://bridge.invalid", play("http://relay.invalid/open")) is None
+    assert client.posted == ["womble song", "http://relay.invalid/open"]

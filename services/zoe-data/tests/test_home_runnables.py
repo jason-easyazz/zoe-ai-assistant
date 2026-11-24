@@ -39,7 +39,7 @@ DEFS = {
     "scene.leaving": _acts(("light.hall", "", "off"), ("lock.front_door", "", "locked"), ("cover.garage_door", "", "closed"),
                            ("alarm_control_panel.house", "", "armed_away")),
     "script.goodnight": _acts(("light.hall", "light.turn_off", ""), ("lock.front_door", "lock.lock", ""),
-                              ("cover.blind", "cover.close_cover", ""), ("", "notify.send_message", "")),
+                              ("cover.blind", "cover.close_cover", ""), ("", "persistent_notification.create", "")),
     "scene.arrive_home": _acts(("light.hall", "", "on"), ("lock.front_door", "", "unlocked")),
     "scene.air_the_house": _acts(("cover.garage_door", "", "open")),
     "scene.members_only": _acts(("valve.water_main", "", "")),                     # a member with no known target state
@@ -247,7 +247,7 @@ HA = {
         {"action": "light.turn_off", "target": {"entity_id": ["light.hall", "light.den_lamp"]}},
         {"delay": "00:00:02"},
         {"if": [{"condition": "state", "entity_id": "lock.front_door", "state": "unlocked"}],
-         "then": [{"service": "lock.lock", "entity_id": "lock.front_door"}], "else": [{"action": "notify.send_message", "data": {"message": "Sleep well"}}]},
+         "then": [{"service": "lock.lock", "entity_id": "lock.front_door"}], "else": [{"action": "persistent_notification.create", "data": {"message": "Sleep well"}}]},
         {"choose": [{"conditions": [], "sequence": [{"action": "cover.close_cover", "data": {"entity_id": "cover.blind, cover.garage_door"}}]}],
          "default": [{"repeat": {"count": 2, "sequence": [{"parallel": [{"action": "light.turn_off", "target": {"entity_id": "light.porch"}}]}]}}]}]},
     "config/script/config/let_in": {"sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.hall"}},
@@ -310,7 +310,7 @@ async def test_the_real_bridge_endpoint_reads_each_definition_and_zoe_decides(re
     assert body == {"readable": True, "actions": [
         {"service": s, "entity_id": e, "state": ""} for s, e in [
             ("light.turn_off", "light.hall"), ("light.turn_off", "light.den_lamp"), ("lock.lock", "lock.front_door"),
-            ("notify.send_message", ""), ("cover.close_cover", "cover.blind"), ("cover.close_cover", "cover.garage_door"),
+            ("persistent_notification.create", ""), ("cover.close_cover", "cover.blind"), ("cover.close_cover", "cover.garage_door"),
             ("light.turn_off", "light.porch")]]}
     texts = json.dumps([await real_bridge.get_definition(e) for e in BRIDGE_SAFE + BRIDGE_ADULT_ONLY])
     assert "Film night" not in texts and "Good night" not in texts and "Sleep well" not in texts and "brightness" not in texts
@@ -527,7 +527,7 @@ def test_a_call_this_reader_does_not_know_is_unreadable():
                ("", "homeassistant.restart"), ("light.hall", "homeassistant.reload_all"), ("womble.gate", "homeassistant.turn_on"),
                ("homeassistant.x", "homeassistant.turn_on"), ("", "conversation.process"), ("", "rest_command.gate")]
     assert {(e, s): home_runnables.classify(_acts((e, s, ""))) for e, s in unknown} == dict.fromkeys(unknown, "unreadable")
-    known = [("light.hall", "homeassistant.turn_off"), ("", "notify.send_message"), ("", "tts.speak"), ("light.hall", "light.toggle"),
+    known = [("light.hall", "homeassistant.turn_off"), ("", "persistent_notification.create"), ("", "tts.speak"), ("light.hall", "light.toggle"),
              ("lock.front_door", "lock.lock"), ("input_boolean.away", "input_boolean.turn_on")]
     assert {home_runnables.classify(_acts(k + ("",))) for k in known} == {"safe"}
     assert home_runnables.classify(_acts(("lock.front_door", "homeassistant.toggle", ""))) == "opens"
@@ -579,3 +579,88 @@ async def test_a_plain_command_with_ordinary_data_is_still_for_everyone(reads, h
         assert (await _route(KID, "light.kitchen_lamp", "turn_on", params))["ok"] is True
     assert (await _route(KID, "climate.den", "set_temperature", {"temperature": 21.5}))["ok"] is True
     assert reads == [] and len(house["sent"]) == 8
+
+
+# ---- review fix 2026-11-24: (domain, service) PAIRS, not domains ---------------------------------------------------------------------
+#: every one was ``safe`` on the old code (its domain was on the list, or the call named no entity on ``notify``)
+CARRIES_OR_TRIGGERS = [
+    ("remote.den", "remote.send_command"), ("remote.den", "remote.learn_command"), ("remote.den", "remote.delete_command"),
+    ("remote.den", "remote.turn_on"), ("remote.den", "remote.toggle"), ("remote.den", "homeassistant.turn_on"),
+    ("remote.den", "homeassistant.toggle"), ("button.gate", "button.press"), ("input_button.gate", "input_button.press"),
+    ("media_player.den", "media_player.play_media"), ("media_player.den", "media_player.join"),
+    ("vacuum.den", "vacuum.send_command"), ("camera.porch", "camera.snapshot"), ("camera.porch", "camera.record"),
+    ("camera.porch", "camera.play_stream"), ("text.gate_code", "text.set_value"), ("", "notify.send_message"),
+    ("", "notify.mobile_app_womble"), ("notify.womble", "notify.send_message"), ("light.hall", "notify.send_message"),
+    ("light.hall", "light.womble"), ("switch.kettle_plug", "switch.some_new_service"), ("", "tts.womble_say"),
+    ("", "persistent_notification.womble"), ("remote.den", "light.turn_on"), ("light.hall", "remote.turn_off"),
+    ("button.gate", "homeassistant.turn_on"), ("light.hall", "homeassistant.womble")]
+#: the named controls: the same domains, a service that only changes the named entity's own state
+OWN_STATE = [("remote.den", "remote.turn_off"), ("remote.den", "homeassistant.turn_off"), ("media_player.den", "media_player.media_pause"),
+             ("media_player.den", "media_player.volume_set"), ("vacuum.den", "vacuum.start"), ("camera.porch", "camera.turn_off"),
+             ("light.hall", "light.turn_on"), ("switch.kettle_plug", "switch.toggle"), ("input_text.note", "input_text.set_value"),
+             ("light.hall", "homeassistant.update_entity"), ("", "tts.speak"), ("", "persistent_notification.dismiss")]
+
+
+def test_a_script_call_is_read_by_its_domain_and_service_pair_not_by_its_domain():
+    """``remote.send_command`` can transmit the code that opens a garage or a gate, ``button.press`` triggers whatever the
+    button is wired to, ``play_media`` makes a player fetch an address, a ``notify`` target can be a shell command: none
+    acts only on the entity it names, and a script's data is not seen here, so each is unreadable whatever it carries. So is
+    a service this list has never heard of on a domain it knows. Fails on the old code (all 28 read ``safe``).
+    Control run (named): ``OWN_STATE`` below stays ``safe``. Control run (code): with ``_reads_as_its_targets`` back to the
+    domain test (``service_domain in OWN_STATE_SERVICES``) the first assertion fails."""
+    got = {(e, s): home_runnables.classify(_acts(("light.hall", "light.turn_on", ""), (e, s, ""))) for e, s in CARRIES_OR_TRIGGERS}
+    assert got == dict.fromkeys(CARRIES_OR_TRIGGERS, "unreadable")
+    assert {(e, s): home_runnables.classify(_acts((e, s, ""))) for e, s in OWN_STATE} == dict.fromkeys(OWN_STATE, "safe")
+    assert home_runnables.classify(_acts(("lock.front_door", "lock.some_new_service", ""))) == "opens"      # secure: never safe
+
+
+def test_a_scene_member_is_read_only_when_its_domain_and_state_are_known():
+    """A scene puts each member into a state through the member's own domain: a remote restored to ``on`` may start an
+    activity (a stored command sequence), and a domain this list does not know (a button, an integration's own) may do
+    anything. Fails on the old code (every member outside the four secure domains read ``safe``).
+    Control run (named): a remote set ``off``, a light and a media player stay ``safe``. Control run (code): with
+    ``_member_is_read`` answering True the first assertion fails."""
+    unread = [("remote.den", "on"), ("remote.den", ""), ("button.gate", ""), ("input_button.gate", ""), ("womble.gate", "on"),
+              ("text.gate_code", ""), ("notify.womble", "")]
+    assert {m: home_runnables.classify(_acts(("light.hall", "", "on"), (m[0], "", m[1]))) for m in unread} == dict.fromkeys(unread, "unreadable")
+    for member in (("remote.den", "off"), ("light.hall", "on"), ("media_player.den", "playing"), ("input_boolean.away", "")):
+        assert home_runnables.classify(_acts((member[0], "", member[1]))) == "safe", member
+
+
+PAYLOAD_HA = {
+    "config/script/config/sends_a_code": _script({"action": "light.turn_on", "target": {"entity_id": "light.hall"}},
+                                                 {"action": "remote.send_command", "target": {"entity_id": "remote.den"},
+                                                  "data": {"command": "womble"}}),
+    "config/script/config/presses_a_button": _script({"action": "button.press", "target": {"entity_id": "button.gate"}}),
+    "config/script/config/plays_an_address": _script({"action": "media_player.play_media", "target": {"entity_id": "media_player.den"},
+                                                      "data": {"media_content_id": "http://relay.invalid/open", "media_content_type": "music"}}),
+    "config/script/config/tells_a_phone": _script({"action": "notify.mobile_app_womble", "data": {"message": "command_womble"}}),
+    "config/script/config/remote_off": _script({"action": "remote.turn_off", "target": {"entity_id": "remote.den"}}),
+    **_ui_scene(20, {"media_player.den": {"state": "playing", "media_content_id": "http://relay.invalid/open"}}, ("media_player.den",)),
+    **_ui_scene(21, {"light.hall": {"state": "on"}, "remote.den": {"state": "off", "activity": "womble"}}),
+    **_ui_scene(22, {"light.hall": {"state": "on", "effect": {"url": "http://relay.invalid/open"}}}),
+    **_ui_scene(23, {"media_player.den": {"state": "playing", "volume_level": 0.4, "source": "womble"}}, ("media_player.den",)),
+}
+
+
+async def test_a_command_code_a_button_or_an_address_in_a_definition_is_adult_only_end_to_end(real_bridge, house, monkeypatch):
+    """The bridge's REAL endpoint over a faked Home Assistant, the real classifier and the route. A script that sends a
+    remote command, presses a button, plays an address or messages a phone, and a SCENE whose member's stored attributes
+    carry a content id, an activity or an address (applying the scene makes Home Assistant send it), are refused for the
+    child and run for the adult. Fails on the old code (all seven ran for the child).
+    Control run (named): ``script.remote_off`` and ``scene.s23`` (a player restored with a volume and a source) run for the
+    child. Control run (code): with the bridge's ``_names_a_payload`` answering False the three scenes run for the child."""
+    for key, value in PAYLOAD_HA.items():
+        monkeypatch.setitem(MORE_HA, key, value)
+    refused = ["script.sends_a_code", "script.presses_a_button", "script.plays_an_address", "script.tells_a_phone",
+               "scene.s20", "scene.s21", "scene.s22"]
+    for entity in refused:
+        with pytest.raises(HTTPException) as exc:
+            await _route(KID, entity)
+        assert exc.value.status_code == 403, entity
+    for scene in refused[4:]:
+        assert await real_bridge.get_definition(scene) == {"readable": False, "reason": "payload"}
+    assert house["sent"] == []
+    assert (await _route(KID, "script.remote_off"))["ok"] is True and (await _route(KID, "scene.s23"))["ok"] is True
+    assert (await _route(MEMBER, "script.sends_a_code"))["ok"] is True and len(house["sent"]) == 3
+    assert "relay.invalid" not in json.dumps([await real_bridge.get_definition(e) for e in refused + ["scene.s23"]])      # no payload leaves
