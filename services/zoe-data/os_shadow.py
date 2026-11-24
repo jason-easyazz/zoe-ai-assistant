@@ -1182,6 +1182,8 @@ JOURNAL_DOOR_VERBS = ("journal.create", "journal.edit", "journal.delete")
 #: The contacts area (``labs/zoe-os/zoe_os/people_door.py``; the service door is ``people_service``). Ids only: never a name, a
 #: number, a birthday, a note or a relationship. Reading is not asked.
 PEOPLE_FLAG = "ZOE_OS_PEOPLE"
+MEMORY_FLAG = "ZOE_OS_MEMORY"            # ``kernel`` = a member's change to a memory row asks first; a forget is told afterwards (memory_door.py)
+MEMORY_DOOR_VERBS = ("memory.remember", "memory.correct", "memory.approve", "memory.forget")
 PEOPLE_DOOR_VERBS = ("contact.create", "contact.edit", "contact.delete")
 #: The two ACTION areas (``labs/zoe-os/zoe_os/music_door.py`` / ``home_door.py``; the service doors are ``action_doors``, called
 #: by the one sender of each: ``music_service._ma_response``, ``home_control.send``). Nothing is stored for either. Ids and closed
@@ -1202,7 +1204,8 @@ AREAS = {"lists": _Area(LISTS_FLAG, LISTS_ASK_MS_FLAG, DOOR_VERBS, LIST_SHADOW_V
          "journal": _Area(JOURNAL_FLAG, None, JOURNAL_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
          "people": _Area(PEOPLE_FLAG, None, PEOPLE_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
          "music": _Area(MUSIC_FLAG, None, MUSIC_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
-         "home": _Area(HOME_FLAG, None, HOME_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
+         "home": _Area(HOME_FLAG, None, HOME_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True),
+         "memory": _Area(MEMORY_FLAG, None, MEMORY_DOOR_VERBS, frozenset(), "door_ask", "door_report", "target", None, True)}
 ASK_DEADLINE_S = 0.150            # the whole KERNEL ask (door start-up and queue wait included), not the door's own list lookup in
 #                                  the database; past it the change proceeds ``not_checked`` (ZOE_OS_LISTS_ASK_MS)
 DOOR_QUEUE_MAX = 256
