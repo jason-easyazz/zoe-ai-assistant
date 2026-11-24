@@ -115,8 +115,8 @@ Generated from `household_text.py`; do not edit by hand.
 | `chat_feedback` | primary | `pg:chat_feedback` | a corrected response | - | - | gap | no age limit: kept until deleted | conversation_feedback.py | - |
 | `background_tasks` | primary | `pg:background_tasks` | a background task's text and result | - | - | gap | no age limit: kept until deleted | background_runner.py (read side; no live writer in zoe-data) | - |
 | `pending_suggestions` | primary | `pg:pending_suggestions` | offer text (may name people) | `memory_forget_cascade._run` | `member_derived_forget.forget_user` | reached | no age limit: kept until deleted | pending_suggestions.py, anticipation.py | - |
-| `notes` | primary | `pg:notes` | the member's notes | - | - | gap | no age limit: kept until deleted | intent_router.py, pending_suggestions.py | - |
-| `journal_entries` | primary | `pg:journal_entries` | the member's journal | - | - | gap | no age limit: kept until deleted | intent_router.py, mcp_server.py | - |
+| `notes` | primary | `pg:notes` | the member's notes | - | - | gap | no age limit: kept until deleted | note_service.py | - |
+| `journal_entries` | primary | `pg:journal_entries` | the member's journal | - | - | gap | no age limit: kept until deleted | journal_service.py | - |
 | `lists` | primary | `pg:lists` | list names | - | - | gap | no age limit: kept until deleted | list_service.py | - |
 | `list_items` | primary | `pg:list_items` | list items (shopping and other lists) | - | - | gap | no age limit: kept until deleted | list_service.py | - |
 | `people_field_values` | primary | `pg:people_field_values` | custom fields about a person | - | - | gap | no age limit: kept until deleted | routers/people.py | - |

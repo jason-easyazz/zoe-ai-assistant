@@ -9,6 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+import note_service
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
@@ -127,19 +128,8 @@ async def create_note(
     note_id = str(uuid.uuid4())
     tags_json = json.dumps(payload.tags) if payload.tags else None
 
-    await db.execute(
-        """INSERT INTO notes (id, user_id, title, content, category, tags, visibility, deleted)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
-        (
-            note_id,
-            user_id,
-            payload.title,
-            payload.content,
-            payload.category,
-            tags_json,
-            payload.visibility,
-        ),
-    )
+    await note_service.create_note_record(db, note_id=note_id, user_id=user_id, title=payload.title, content=payload.content,
+                                          category=payload.category, tags_json=tags_json, visibility=payload.visibility)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM notes WHERE id = ?", [note_id])
@@ -213,10 +203,7 @@ async def update_note(
 
     updates.append("updated_at = NOW()")
     params.append(note_id)
-    await db.execute(
-        f"UPDATE notes SET {', '.join(updates)} WHERE id = ?",
-        params,
-    )
+    await note_service.update_note_record(db, note_id=note_id, updates=updates, params=params)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM notes WHERE id = ?", [note_id])
@@ -259,10 +246,7 @@ async def delete_note(
     if dict(row)["user_id"] != user_id:
         raise HTTPException(status_code=403, detail="Not authorised to delete this note")
 
-    await db.execute(
-        "UPDATE notes SET deleted = 1, updated_at = NOW() WHERE id = ?",
-        [note_id],
-    )
+    await note_service.delete_note_record(db, note_id=note_id)
     await db.commit()
 
     await broadcaster.broadcast("notes", "note_deleted", {"id": note_id}, user_id=user_id)
