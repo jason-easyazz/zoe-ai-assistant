@@ -120,14 +120,20 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
     if reap_on and command.startswith(_MA_ACTIVITY_PREFIXES) and command != "player_queues/all":
         ma_ondemand.note_activity()
     # The Zoe OS music door (ZOE_OS_MUSIC=kernel; action_doors): the one place a command to the music engine leaves. A refusal
-    # raises MusicRefused (the command is not sent); stopping and turning down are sent first and told afterwards. Flag off, a
-    # read, or nobody acting (an alarm's music, the discovery jobs): a flag read at most.
-    import action_doors
+    # raises MusicRefused (the command is not sent); stopping and turning down are sent first and told afterwards. Flag off: the
+    # flag read and nothing else (the command is not mapped, its arguments not read). A read, or nobody acting (an alarm's
+    # music, the discovery jobs): not asked.
+    import os_shadow
 
-    verb = action_doors.music_verb(command, args)
-    asked = None if verb is None else await action_doors.before(
-        "music", verb, args.get("player_id") or args.get("queue_id") or args.get("target_player"),
-        quiet=verb in action_doors.MUSIC_QUIET, refused=action_doors.MusicRefused)
+    door = os_shadow.area_on("music")
+    asked = None
+    if door:
+        import action_doors
+
+        verb = action_doors.music_verb(command, args)
+        asked = None if verb is None else await action_doors.before(
+            "music", verb, args.get("player_id") or args.get("queue_id") or args.get("target_player"),
+            quiet=verb in action_doors.MUSIC_QUIET, refused=action_doors.MusicRefused)
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as c:
             # MA's JSON-RPC shim requires args NESTED under "args" — flat args are
@@ -139,10 +145,12 @@ async def _ma_response(command: str, timeout_s: float = _TIMEOUT_S, **args: Any)
             r = await c.post(f"{_ma_url()}/api", json=payload, headers=_ma_headers())
             if reap_on:
                 ma_ondemand.note_seen_up()
-            action_doors.after(asked, getattr(r, "status_code", 500) == 200)
+            if door:
+                action_doors.after(asked, getattr(r, "status_code", 500) == 200)
             return r
     except Exception as exc:  # noqa: BLE001 — MA is optional; never break Zoe
-        action_doors.after(asked, False)
+        if door:
+            action_doors.after(asked, False)
         logger.debug("MA %s unreachable: %s", command, exc)
         # A transport failure is the only sign zoe-data gets that MA went away —
         # possibly to be re-created on a different version. Re-read /info next time.
