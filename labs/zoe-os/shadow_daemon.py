@@ -63,6 +63,8 @@ from zoe_os.alarm_door import ALARM_VERBS as ALARM_DOOR_VERBS, TIMER_VERBS as TI
 from zoe_os.calendar_door import VERBS as CALENDAR_DOOR_VERBS  # noqa: E402
 from zoe_os.notes_door import JOURNAL_VERBS as JOURNAL_DOOR_VERBS, NOTE_VERBS as NOTE_DOOR_VERBS  # noqa: E402
 from zoe_os.people_door import VERBS as PEOPLE_DOOR_VERBS  # noqa: E402
+from zoe_os.music_door import VERBS as MUSIC_DOOR_VERBS  # noqa: E402
+from zoe_os import home_door  # noqa: E402
 from zoe_os.remind_door import VERBS as REMINDER_DOOR_VERBS  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 from zoe_os import shadow_state  # noqa: E402
@@ -77,7 +79,7 @@ ACTS = (*BRAIN["acts"], "list.remove")       # the acts every roster member is g
 #: the manifest also names the door's verbs, every area's (``zoe_os/lists.py``, ``remind_door.py``, ``alarm_door.py``,
 #: ``calendar_door.py``): a ceiling for ``list_ask`` / ``door_ask``, decided by role, granted to nobody
 SHADOW_BRAIN = {**BRAIN, "acts": [*ACTS, *LIST_DOOR_VERBS, *REMINDER_DOOR_VERBS, *ALARM_DOOR_VERBS, *TIMER_DOOR_VERBS,
-                                   *CALENDAR_DOOR_VERBS, *NOTE_DOOR_VERBS, *JOURNAL_DOOR_VERBS, *PEOPLE_DOOR_VERBS]}
+                                   *CALENDAR_DOOR_VERBS, *NOTE_DOOR_VERBS, *JOURNAL_DOOR_VERBS, *PEOPLE_DOOR_VERBS, *MUSIC_DOOR_VERBS, *home_door.VERBS]}
 
 
 def register_list_remove(kernel, lists: Lists) -> None:
@@ -392,6 +394,8 @@ def build(state: Path):
     # stays in the kernel's people (forgettable) and changes nothing of anyone's. Per kernel: this server's roster, which
     # ``apply_roster`` replaces on each re-read.
     k.door.roster = lambda: srv.roster
+    # each child's home-control level, beside THIS roster: this kernel's reader (``Kernel.home``), never another daemon's
+    k.home.levels = home_door.file_levels(state / home_door.LEVELS_FILE)
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 
