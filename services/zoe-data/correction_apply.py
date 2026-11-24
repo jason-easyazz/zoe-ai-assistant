@@ -52,7 +52,7 @@ def enabled() -> bool:
 
 @dataclass
 class CorrectionResult:
-    kind: str                 # "date" | "pet" | "row" | "swap"
+    kind: str                 # "date" | "pet" | "row" | "swap" | "refused" (the Zoe OS contacts door said no: nothing changed)
     reply: str
     changed: list[str] = field(default_factory=list)  # the corrected texts
 
@@ -418,7 +418,21 @@ async def _retype_edge_as_pet(db, user_id: str, edge_id: str, a: str, b: str, pe
         return False
 
 
-async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: str, evidence=None) -> int:
+async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: str, evidence=None, *,
+                    stamps_at: Optional[dict]) -> int:
+    """The Zoe OS contacts door (``ZOE_OS_PEOPLE=kernel``): a spoken correction is a change to the member's OWN contact (its
+    relationship and its edges): asked once, up front, then made exactly as it always was (``_make_pet_asked``).
+    ``stamps_at``: the caller's ``people_service.stamps_now()``, taken before it read the contact (review of #2700: this took
+    its own, after ``apply_pet_correction`` had read the contacts). A refusal raises ``people_service.ContactRefused``."""
+    import kernel_door
+
+    asked = await people_service.ask_contact("contact.edit", actor=user_id, person_id=person_id, owner=user_id, visibility=None,
+                                             stamps_at=stamps_at)
+    async with kernel_door.reported(asked):
+        return await _make_pet_asked(db, user_id, person_id, current_rel, kind, evidence)
+
+
+async def _make_pet_asked(db, user_id: str, person_id: str, current_rel: str, kind: str, evidence=None) -> int:
     """Relationship -> ``pet <kind>``; parent/sibling/... edges -> the ``pet`` edge type
     (pet = person_a, owner = person_b; labels as ``RELATIONSHIP_TYPES['pet']``). The old edges are closed, not
     rewritten (see ``_retype_edge_as_pet``).
@@ -458,6 +472,7 @@ async def apply_pet_correction(
     stmt = pet_statement(text)
     if not stmt:
         return None
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before the contacts are read
     name, kind = stmt
     if svc is None:
         from memory_service import get_memory_service
@@ -484,8 +499,11 @@ async def apply_pet_correction(
     changed = 0
     excerpt = " ".join((text or "").split())
     evidence = _pet_evidence(user_id, text)
-    for p in people:
-        changed += await _make_pet(db, user_id, p["id"], p["rel"], kind, evidence)
+    try:
+        for p in people:
+            changed += await _make_pet(db, user_id, p["id"], p["rel"], kind, evidence, stamps_at=stamps_at)
+    except people_service.ContactRefused as exc:      # the Zoe OS kernel said no (ZOE_OS_PEOPLE=kernel): final, nothing of this
+        return CorrectionResult("refused", exc.line(), [])      # correction is written, and the turn says so (not the brain)
     for r in child_rows:
         new = _rewrite_child_row(r.text, name, pet_text)
         if not new or new == r.text:
@@ -677,6 +695,7 @@ async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> str:
     (the contact update or its memory mirror did not hold: the note and the contact now disagree). A failure is logged at WARNING
     with the account and the contact's id, never a name."""
     pid = ""
+    stamps_at = people_service.stamps_now()      # the Zoe OS contacts door: stamped before the contact is read
     try:
         from datetime import datetime
 
@@ -691,7 +710,8 @@ async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> str:
             if len(rows) != 1:
                 return "none"
             pid = str(rows[0]["id"])
-            await people_service.write_contact(db, "corrected_name", (new, datetime.utcnow().isoformat() + "Z", pid, user_id))
+            await people_service.write_contact(db, "corrected_name", (new, datetime.utcnow().isoformat() + "Z", pid, user_id),
+                                               actor=user_id, person_id=pid, owner=user_id, stamps_at=stamps_at)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("correction_apply: contact rename FAILED user=%s person=%s (%s): the note changed, the contact did not",

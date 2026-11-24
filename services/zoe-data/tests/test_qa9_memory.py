@@ -878,7 +878,7 @@ def test_a_pet_in_the_people_table_is_not_a_person(make_pet, refused, monkeypatc
         await db.execute("INSERT INTO people (id, user_id, name, relationship) VALUES (?, ?, ?, ?)", ("p1", UID, "Brindle", "friend"))
         await db.commit()
         if make_pet:
-            assert await ca._make_pet(db, UID, "p1", "friend", "dog") >= 1
+            assert await ca._make_pet(db, UID, "p1", "friend", "dog", stamps_at=None) >= 1
         async def ensure(_db):
             return db, False
 
