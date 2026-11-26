@@ -1635,7 +1635,7 @@ async def _note_unacked_voice_nav(db: Any, panel_id: str, current_action_id: str
         await db.commit()
         return True
     except Exception as exc:
-        logger.debug("voice navigate ack check failed for panel=%s (non-fatal): %s", panel_id, exc)
+        logger.warning("voice navigate ack check failed for panel=%s (non-fatal): %s", panel_id, type(exc).__name__)
         return False
 
 
