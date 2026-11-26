@@ -1343,6 +1343,11 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         if (!(addressedToThisPanel(msg) || panelMatches(_uiActionPanel))) {
                             // Event belongs to a different panel — ignore entirely.
                         } else if (action && action.action_type) {
+                            // A pushed navigate carries the server's row id as `action_id` only. Without this it got a
+                            // local push_ id and was never acked, so the server could not tell a page that ran its voice
+                            // navigates from one that had stopped (2026-11-26). Navigates only: every other pushed
+                            // action keeps its push_ id (a row still queued is run and acked by the poll, as before).
+                            if (!action.id && action.action_id && (action.action_type === 'panel_navigate' || action.action_type === 'panel_navigate_fullscreen')) action.id = String(action.action_id);
                             if (!action.id) action.id = 'push_' + Date.now();
                             executeAction(action).then(r => { if (action.id && !action.id.startsWith('push_')) ackAction(action.id, r); }).catch(() => {});
                         }

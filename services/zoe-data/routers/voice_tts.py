@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 import wave
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 from types import SimpleNamespace
@@ -1565,6 +1565,80 @@ async def _broadcast_calendar_ui(
         logger.debug("voice calendar ui enqueue failed (non-fatal): %s", exc)
 
 
+# A pushed voice navigate is written `success` + this note the moment it is BROADCAST (delivery, not execution). The
+# page's ack (routers/ui_actions.ack_ui_action) then rewrites the row and clears the note - so a row still carrying it
+# is "delivered, never acknowledged". Do not reword it without the reader below.
+_NAV_DELIVERED_NOTE = "Delivered over panel push"
+_NAV_UNACKED_GRACE_S = 10.0
+_NAV_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d(?::?(\d\d))?)?$")
+
+
+def _nav_row_age_s(updated_at: Any) -> Optional[float]:
+    """Seconds since a ui_actions.updated_at value (TEXT in the schema); None when it cannot be read."""
+    try:
+        if isinstance(updated_at, datetime):
+            ts = updated_at
+        else:
+            # NOW()::TEXT reads "2026-11-01 08:00:00.5+08": a short fraction and an hour-only offset, which
+            # datetime.fromisoformat refuses before Python 3.11. Parse the parts instead of trusting it.
+            m = _NAV_TS_RE.match(str(updated_at).strip())
+            if not m:
+                return None
+            ts = datetime.strptime(m.group(1).replace("T", " "), "%Y-%m-%d %H:%M:%S")
+            ts = ts.replace(microsecond=int((m.group(2) or "0")[:6].ljust(6, "0")))
+            if m.group(3) and m.group(3) != "Z":
+                sign = -1 if m.group(3)[0] == "-" else 1
+                off = timedelta(hours=int(m.group(3)[1:3]), minutes=int(m.group(4) or 0))
+                ts = ts.replace(tzinfo=timezone(sign * off))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
+    except Exception:
+        return None
+
+
+async def _note_unacked_voice_nav(db: Any, panel_id: str, current_action_id: str) -> bool:
+    """Say ONCE when this panel's previous voice navigate was delivered and the page never acknowledged it.
+
+    Runs after the current navigate has been sent, so it costs the panel nothing. A page that has stopped
+    executing what it is pushed looks healthy from here (socket up, broadcast delivered): on 2026-11-26 a page
+    open for 16 days had run fewer than half of its voice navigations and every row read `success`. The line is
+    closed-code (panel id and age only: no words, no url) and the row is stamped `delivered_unacked` so it is
+    reported once; a late ack still overwrites it. Never raises.
+    """
+    try:
+        cur = await db.execute(
+            """SELECT id, status, error_message, updated_at
+               FROM ui_actions
+               WHERE panel_id = ?
+                 AND requested_by = 'voice'
+                 AND action_type = 'panel_navigate'
+                 AND id != ?
+               ORDER BY created_at DESC
+               LIMIT 1""",
+            (panel_id, current_action_id),
+        )
+        row = await cur.fetchone()
+        if not row or row["status"] != "success" or row["error_message"] != _NAV_DELIVERED_NOTE:
+            return False
+        age = _nav_row_age_s(row["updated_at"])
+        if age is not None and age < _NAV_UNACKED_GRACE_S:
+            return False
+        logger.warning("PANEL_NAV_UNACKED panel=%s age_s=%d", panel_id, -1 if age is None else int(age))
+        await db.execute(
+            """UPDATE ui_actions
+               SET error_code = 'delivered_unacked',
+                   error_message = 'Delivered over panel push; the page never acknowledged it'
+               WHERE id = ?""",
+            (row["id"],),
+        )
+        await db.commit()
+        return True
+    except Exception as exc:
+        logger.debug("voice navigate ack check failed for panel=%s (non-fatal): %s", panel_id, exc)
+        return False
+
+
 async def _broadcast_skybridge_ui(
     panel_id: str,
     skybridge_result: dict,
@@ -1683,13 +1757,14 @@ async def _broadcast_skybridge_ui(
                     """UPDATE ui_actions
                        SET status = 'success',
                            error_code = NULL,
-                           error_message = 'Delivered over panel push',
+                           error_message = ?,
                            updated_at = NOW(),
                            acked_at = NOW()
                        WHERE id = ?""",
-                    (nav_message["action_id"],),
+                    (_NAV_DELIVERED_NOTE, nav_message["action_id"]),
                 )
                 await _db.commit()
+                await _note_unacked_voice_nav(_db, panel_id, str(nav_message["action_id"]))
             break
     except Exception as exc:
         logger.warning(

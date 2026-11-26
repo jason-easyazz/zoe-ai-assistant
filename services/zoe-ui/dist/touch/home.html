@@ -1519,7 +1519,8 @@
   // endpoint at boot (sleep_seconds / sleep_enabled) so an operator can tune the
   // active-display window without a redeploy, like idle_seconds/off_seconds.
   var _idleSleepT=null, IDLE_SLEEP_MS=180000, _sleepEnabled=true, IDLE_SLEEP_RETRY_MS=30000;
-  function armIdleSleep(ms){if(_idleSleepT){clearTimeout(_idleSleepT);_idleSleepT=null;}
+  function armIdleSleep(ms){if(!ms)_lastActiveAt=Date.now();   // a bare re-arm IS activity (touch, voice, navigation); the timed 30 s re-checks are not (see FRESH below)
+    if(_idleSleepT){clearTimeout(_idleSleepT);_idleSleepT=null;}
     // Talking to Zoe is activity even with nobody touching the panel — a live
     // session must never fall asleep mid-conversation. Re-armed by convStop().
     if(_convLive)return;
@@ -1586,6 +1587,55 @@
         _tally(!!(d&&d.block));
       }).catch(function(){_tally(false);});
     },ms||IDLE_SLEEP_MS);}
+  // FRESH-BEGIN - the estate reloads itself about once a day, and only while nobody is using it.
+  // A kiosk page that stays open for weeks degrades without saying so: one that had been up 16 days ran fewer than half
+  // of the voice navigations pushed to it (2026-11-26) and a single reload cured it. A voice navigate normally replaces the
+  // page, so this only matters to a page that has stopped doing that - which is exactly the page that needs it.
+  // Due = a kiosk (never a member's laptop or phone), loaded FRESH_AGE_MS ago, no self-reload inside FRESH_AGE_MS (the
+  // stamp is in localStorage so it survives the reload; storage that cannot be read or written = no reload), resting on
+  // the night clock or home with FRESH_QUIET_MS of no touch / voice / navigation, and nothing on screen that a reload
+  // would take away: no conversation, voice turn or verified voice session, no modal, typed bar, sign-in or PIN card,
+  // card, launcher, voice enrolment, ringing alarm or timer, and no timer still counting. The page is asked for first
+  // (HEAD): an unreachable server must never trade a working estate for a browser error page.
+  var FRESH_AGE_MS=72000000, FRESH_QUIET_MS=180000, FRESH_TICK_MS=300000, FRESH_KEY='zoe_estate_fresh_reload_at';
+  var _freshBootAt=Date.now(), _lastActiveAt=Date.now(), _freshBusy=false;
+  function freshDue(s){
+    if(!s||s.kiosk!==true)return false;
+    if(!(s.now-s.bootAt>=FRESH_AGE_MS))return false;
+    if(!isFinite(s.lastReloadAt)||(s.lastReloadAt<=s.now&&s.now-s.lastReloadAt<FRESH_AGE_MS))return false;
+    if(s.cur!=='sleep'&&s.cur!=='home')return false;
+    if(s.talking||s.overlay||s.timers)return false;
+    return s.now-s.lastActiveAt>=Math.max(FRESH_QUIET_MS,s.idleMs||0);
+  }
+  function freshState(){
+    var last=NaN,vs=false,timers=false,ob=document.getElementById('orb');
+    try{var v=localStorage.getItem(FRESH_KEY);last=(v===null||v==='')?0:Number(v);}catch(e){last=NaN;}
+    try{vs=!!(window.ZoeVoiceSession&&window.ZoeVoiceSession.state().open);}catch(e){vs=true;}
+    try{timers=Object.keys(_tAlarm.known||{}).length>0||Object.keys(_tAlarm.pending||{}).length>0;}catch(e){timers=true;}
+    return {now:Date.now(),bootAt:_freshBootAt,lastReloadAt:last,kiosk:window.__kiosk,cur:_cur,idleMs:IDLE_SLEEP_MS,lastActiveAt:_lastActiveAt,
+      talking:!!(_convLive||voiceConvOpen()||vs||(ob&&(ob.classList.contains('listening')||ob.classList.contains('busy')))),
+      overlay:!!document.querySelector('#estModal.on,#cmdbar.on,#authov.on,.apin.on,#cardwrap.on,#stage.lopen,#tmrAlarm.on,#alarmRing.on,#zvs-card,#zve'),
+      timers:timers};
+  }
+  function freshReload(){
+    // Only what makes this browser this panel survives; a leftover display param must not replay on the fresh page.
+    try{var sp=new URLSearchParams(location.search),keep=[];['panel_id','kiosk'].forEach(function(k){if(sp.get(k)!==null)keep.push(k+'='+encodeURIComponent(sp.get(k)));});
+      history.replaceState(null,'',location.pathname+(keep.length?('?'+keep.join('&')):''));}catch(e){}
+    location.reload();
+  }
+  function freshTick(){
+    if(_freshBusy||!freshDue(freshState()))return;
+    _freshBusy=true;
+    zfetch(location.pathname,{method:'HEAD',cache:'no-store',credentials:'include'},8000).then(function(r){
+      _freshBusy=false;
+      if(!r||!r.ok)return;
+      if(!freshDue(freshState()))return;   // someone woke the panel while the page was being asked for
+      try{localStorage.setItem(FRESH_KEY,String(Date.now()));}catch(e){return;}
+      freshReload();
+    },function(){_freshBusy=false;});
+  }
+  if(window.__kiosk===true)setInterval(freshTick,FRESH_TICK_MS);
+  // FRESH-END
   // Any touch on the panel means the user took over — the screen is theirs.
   document.addEventListener('pointerdown',function(){_userTookOver=true;_voiceScreen=false;cancelAutoHome();armIdleSleep();},true);
 
@@ -5523,6 +5573,6 @@
 <script src="/js/touch-voice-session.js?v=vs-2"></script>
 <script src="/js/touch-review-cards.js?v=rc-2"></script>
 <script src="/js/touch-voice-enroll.js?v=ve-1"></script>
-<script src="/js/touch-ui-executor.js?v=estate-11-panel-target"></script>
+<script src="/js/touch-ui-executor.js?v=estate-12-nav-ack"></script>
 </body>
 </html>
