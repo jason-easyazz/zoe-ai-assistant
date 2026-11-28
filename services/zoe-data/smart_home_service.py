@@ -378,6 +378,11 @@ async def set_device(entity_id: str, on: bool, *, brightness_pct: int | None = N
 
 
 async def activate_scene(scene_id: str) -> bool:
+    import home_opening
+
+    # Backstop: a scene that unlocks or opens anything, or that Zoe cannot read, is adult-only (home_opening.py).
+    if await home_opening.refused(scene_id, "turn_on", via="spoken"):
+        return False
     result = await _ha_post("/scenes/activate", {"scene_id": scene_id})
     return isinstance(result, dict)
 
@@ -762,6 +767,11 @@ async def resolve_smart_home(
                 _home_card(devices, scenes, status="Home", summary="Pick a scene."),
                 "activate_scene",
             )
+        import home_opening
+
+        if await home_opening.refused(str(scene.get("scene_id")), "turn_on", via="spoken"):      # said plainly, nothing sent
+            return {"handled": True, "auth_required": True, "intent": {"domain": "smart_home", "action": action},
+                    "spoken_summary": home_opening.REFUSAL, "cards": [], "actions": []}
         scene_timed_out: list = []
         _TIMED_OUT.set(scene_timed_out)
         ok = await activate_scene(str(scene.get("scene_id")))

@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import httpx
+import re
+from urllib.parse import quote
 import json
 import logging
 import os
@@ -554,6 +556,184 @@ async def activate_scene(request: SceneActivateRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# -- What a scene or a script DOES (read-only) ----------------------------------------------------------------------
+# zoe-data decides who may run one (an adult only when it unlocks or opens something, or cannot be read). This endpoint
+# adds no ability to act and returns only entity ids, service names and target states: no names, no free text. Anything
+# it cannot fetch or does not recognise is answered {"readable": false, "reason": <closed code>} with HTTP 200.
+_NO_OP_STEPS = frozenset({"delay", "wait_template", "variables", "stop", "condition"})
+_CONTAINER_STEPS = frozenset({"sequence", "parallel", "repeat", "choose", "default", "if", "then", "else"})
+_STEP_NOISE = frozenset({"alias", "enabled", "continue_on_error", "metadata", "response_variable", "conditions", "count",
+                         "while", "until", "for_each"})
+
+
+_SELECTOR_KEYS = frozenset({"area_id", "device_id", "label_id", "floor_id"})
+_DEFINITION_ID = re.compile(r"^(scene|script)\.[a-z0-9_]+$")
+
+
+class _Unreadable(Exception):
+    """A step this reader does not recognise: the whole definition is unreadable."""
+
+
+def _plain(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip() or "{{" in value or "{%" in value:
+        raise _Unreadable("templated_or_not_text")
+    return value.strip().lower()
+
+
+def _entity_ids(value: Any) -> List[str]:
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else str(value).split(",") if isinstance(value, str) else None
+    if items is None:
+        raise _Unreadable("target_shape")
+    return [_plain(i) for i in items]
+
+
+def _names_a_selector(value: Any, depth: int = 0) -> bool:
+    """Does this call data name an area, a device, a label or a floor anywhere in it? Home Assistant resolves those to
+    entities this reader cannot see, in ``data`` and ``service_data`` exactly as in ``target``."""
+    if depth > 8:
+        raise _Unreadable("data_shape")
+    if isinstance(value, dict):
+        return any(str(k).strip().lower() in _SELECTOR_KEYS or _names_a_selector(v, depth + 1) for k, v in value.items())
+    return isinstance(value, list) and any(_names_a_selector(v, depth + 1) for v in value)
+
+
+# What a scene member's stored attributes can make Home Assistant SEND when the scene is applied: a media player restored with
+# a content id is told to play it (an address is fetched by the player), a remote with an activity runs a stored command
+# sequence. zoe-data is given states only, so a member carrying any of these makes the whole scene unreadable.
+_PAYLOAD_KEYS = frozenset({"media_content_id", "activity", "command", "payload", "url", "code"})
+
+
+def _names_a_payload(value: Any, depth: int = 0) -> bool:
+    if depth > 8:
+        raise _Unreadable("data_shape")
+    if isinstance(value, dict):
+        return any(str(k).strip().lower() in _PAYLOAD_KEYS or _names_a_payload(v, depth + 1) for k, v in value.items())
+    return isinstance(value, list) and any(_names_a_payload(v, depth + 1) for v in value)
+
+
+def _moves(value: Any, depth: int = 0) -> bool:
+    """Does this member carry a position or a tilt, at ANY depth (a stored ``attributes`` block included), that is not a
+    plain 0? Anything this cannot read (too deep, a template, a string, a list under such a key) counts as moving."""
+    if depth > 8:
+        return True
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            name = str(key).lower()
+            if "position" in name or "tilt" in name:
+                if isinstance(inner, bool) or not isinstance(inner, (int, float)) or inner != 0:
+                    return True
+            elif _moves(inner, depth + 1):
+                return True
+        return False
+    return isinstance(value, list) and any(_moves(v, depth + 1) for v in value)
+
+
+def _scene_state(target: Any) -> str:
+    """The state a scene sets one member to, or "" when it is not known. A member given a position or tilt that is not 0, anywhere in what
+    is stored for it, is not known to be closed whatever its ``state`` says: Home Assistant moves a cover or a valve to the position. A member whose
+    stored attributes carry a payload (``_PAYLOAD_KEYS``) is not a state at all: the scene is unreadable."""
+    if isinstance(target, dict):
+        if _names_a_payload(target):
+            raise _Unreadable("payload")
+        if _moves(target):
+            return ""
+        target = target.get("state")
+    state = target.strip().lower() if isinstance(target, str) else ""
+    return state if state in _SCENE_STATES else ""      # a fixed vocabulary only: a member's state can be free text
+
+
+# The only target states this endpoint repeats. Anything else (an input_text's words, a sensor reading) is returned as "".
+_SCENE_STATES = frozenset({
+    "on", "off", "open", "opening", "closed", "closing", "locked", "locking", "unlocked", "unlocking", "disarmed", "armed_home",
+    "armed_away", "armed_night", "armed_vacation", "armed_custom_bypass", "arming", "pending", "triggered", "playing", "paused",
+    "idle", "standby", "heat", "cool", "auto", "heat_cool", "dry", "fan_only", "home", "not_home", "unavailable", "unknown"})
+
+
+def _script_calls(steps: Any, depth: int = 0) -> List[Dict[str, str]]:
+    """Every service call in a script's sequence as {"service", "entity_id"} (entity_id "" when the call names none)."""
+    if depth > 8 or not isinstance(steps, list):
+        raise _Unreadable("sequence_shape")
+    calls: List[Dict[str, str]] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            raise _Unreadable("step_shape")
+        keys = set(step) - _STEP_NOISE
+        if "action" in step and "service" in step:
+            raise _Unreadable("call_shape")      # two names for one call: which one runs is not this reader's guess
+        service = step.get("action", step.get("service"))
+        if service is not None:
+            if keys - {"action", "service", "target", "data", "entity_id", "service_data"}:
+                raise _Unreadable("call_shape")      # service_template, data_template, a call mixed with a block ...
+            target, data, service_data = (step.get(k) if step.get(k) is not None else {} for k in ("target", "data", "service_data"))
+            if not all(isinstance(block, dict) for block in (target, data, service_data)):
+                raise _Unreadable("target_kind")      # a whole block that is a template or a list
+            if set(target) - {"entity_id"} or _names_a_selector(data) or _names_a_selector(service_data):
+                raise _Unreadable("target_kind")      # a device, an area, a label or a floor, wherever it is written:
+            #                                           which entities that reaches is not knowable here
+            ids = (_entity_ids(target.get("entity_id")) + _entity_ids(step.get("entity_id"))
+                   + _entity_ids(data.get("entity_id")) + _entity_ids(service_data.get("entity_id")))
+            calls += [{"service": _plain(service), "entity_id": e} for e in (ids or [""])]
+        elif keys and keys <= _NO_OP_STEPS:
+            continue
+        elif keys and keys <= _CONTAINER_STEPS:
+            for key in [k for k in step if k in keys]:      # the definition's own order
+                inner = step[key]
+                if key == "repeat":
+                    inner = inner.get("sequence") if isinstance(inner, dict) else None
+                elif key == "choose":
+                    inner = [{"sequence": o.get("sequence")} if isinstance(o, dict) else o for o in (inner or [])]
+                elif key == "if":
+                    continue                                    # conditions: nothing is called
+                calls += _script_calls(inner, depth + 1)
+        else:
+            raise _Unreadable("step_kind")      # a scene step, a device action, an event, anything newer than this reader
+    return calls
+
+
+@app.get("/definitions/{entity_id}")
+async def get_definition(entity_id: str):
+    """What ``scene.<x>`` or ``script.<x>`` does: {"readable": true, "actions": [{"entity_id", "service", "state"}]}."""
+    try:
+        domain, _, object_id = entity_id.partition(".")
+        if not _DEFINITION_ID.match(entity_id):
+            raise _Unreadable("entity_id_shape")
+        if domain == "script":
+            config = await ha_bridge._make_request("GET", f"config/script/config/{object_id}")
+            if not isinstance(config, dict) or "sequence" not in config:
+                raise _Unreadable("config_shape")
+            return {"readable": True, "actions": [dict(c, state="") for c in _script_calls(config["sequence"])]}
+        if domain != "scene":
+            raise _Unreadable("not_a_scene_or_script")
+        state = await ha_bridge._make_request("GET", f"states/{entity_id}")
+        attrs = state.get("attributes") if isinstance(state, dict) else None
+        members = _entity_ids(attrs.get("entity_id")) if isinstance(attrs, dict) and "entity_id" in attrs else None
+        if not members:
+            raise _Unreadable("no_members")
+        if not attrs.get("id"):
+            # A scene written in YAML has no config this API can read. Its member list alone does not say what it sets them
+            # to, so it is unreadable (the contract: anything outside the UI config API is adult-only).
+            raise _Unreadable("no_config_id")
+        states: Dict[str, str] = {}
+        # A read that fails, times out or is not a 200 raises here and the whole scene is unreadable (never "members with
+        # unknown states": the config may name members the state does not).
+        config = await ha_bridge._make_request("GET", f"config/scene/config/{quote(str(attrs['id']), safe='')}")
+        entities = config.get("entities") if isinstance(config, dict) else None
+        if not isinstance(entities, dict):
+            raise _Unreadable("config_shape")
+        for member, target in entities.items():
+            states[_plain(member)] = _scene_state(target)
+        return {"readable": True, "actions": [{"entity_id": m, "service": "", "state": states.get(m, "")}
+                                              for m in sorted(set(members) | set(states))]}
+    except _Unreadable as exc:
+        return {"readable": False, "reason": str(exc)}
+    except HTTPException as exc:
+        return {"readable": False, "reason": f"home_assistant_{exc.status_code}"}
+    except Exception as exc:  # noqa: BLE001 - never an error to the caller: not knowing is "unreadable"
+        return {"readable": False, "reason": type(exc).__name__}
+
 
 @app.get("/scripts")
 async def get_scripts():
