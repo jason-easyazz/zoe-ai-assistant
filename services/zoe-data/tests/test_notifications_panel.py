@@ -602,7 +602,7 @@ def test_the_press_shows_the_panel_the_wall_safe_rows_without_a_voice_and_contro
     frame = c.post("/api/panel/notifications/open", json={"panel_id": "x"}).json()
     texts = json.dumps(frame)
     assert [it["id"] for it in frame["items"]] == ["n1", "locked"] and frame["touch"] is True and frame["private"] is False
-    assert "battery is low" in texts and frame["items"][0]["open"] == "settings"
+    assert frame["items"][0]["text"] == ns.PANEL_DEVICE_TEXT["omi_health"][0] and frame["items"][0]["open"] == "settings"
     assert "purple parcel" not in texts and "private pendant line" not in texts        # locked, and sensitive not even counted
     assert MEMBER not in texts and OTHER not in texts and frame["member_id"] == ""     # never whose
     assert frame["items"][1]["open"] == "voice" and frame["items"][1]["actions"] == []
@@ -828,7 +828,7 @@ def test_the_panel_shows_one_uncounted_private_row_for_every_ask_and_alert_and_c
     # with ONLY private kinds waiting the card is the one row alone, the same row for one waiting as for nineteen
     assert [it["id"] for it in k.post("/api/panel/notifications/open", json={}).json()["items"]] == ["locked"]
     # controls: the device notice was in words and the panel's to clear; the member's own card names every ask and offers Not now
-    assert frame["items"][0]["meta"] == "The pendant battery is low." and frame["items"][0]["actions"] == [{"key": "done", "label": "Clear"}]
+    assert frame["items"][0]["meta"] == ns.PANEL_DEVICE_TEXT["omi_health"][1] and frame["items"][0]["actions"] == [{"key": "done", "label": "Clear"}]
     mine = run(ns.card(PANEL, MEMBER))
     titles = [it["text"] for it in mine["items"]]
     assert "Transcript check" in titles and "Phone alerts are not getting through" in titles
@@ -940,7 +940,7 @@ def test_every_truthy_or_unreadable_sensitive_payload_is_kept_off_the_panel_and_
     frame = k.post("/api/panel/notifications/open", json={}).json()
     text = json.dumps(frame)
     assert "private pendant line" not in text and "private sync line" not in text and "earlier" not in text
-    assert "battery is low" in text and "nearly full" in text and "one new recording" in text   # control
+    assert [it["text"] for it in frame["items"]].count("Pendant") == 2 and "Pendant synced" in text   # control: the plain rows are there
     held = prc._CARDS[frame["card_token"]].items
     assert sorted(v["ref"] for v in held.values()) == ["h0", "h1", "s1"]
     h = {"X-Panel-Card": frame["card_token"]}
@@ -964,3 +964,78 @@ def test_a_false_or_absent_sensitive_key_is_not_hidden_by_the_python_reading_and
     assert plain(None) and plain("") and plain("{}") and plain('{"count": 2}')
     for raw in SENSITIVE_FORMS[:5] + ['{"sensitive": false}', "not json at all", '{"kind": "low", "sensi', "[1, 2]"]:
         assert not plain(raw), raw
+
+
+def _member_create(monkeypatch, env, member):
+    """The REAL ``POST /api/notifications/`` create route as ``member``: any type, title and message it likes."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from auth import get_current_user
+    from database import get_db
+    from routers import notifications as rn
+
+    async def no_gate(*a, **k):
+        return None
+
+    async def no_broadcast(*a, **k):
+        return None
+    monkeypatch.setattr(rn, "require_feature_access", no_gate)
+    monkeypatch.setattr(rn.broadcaster, "broadcast", no_broadcast)
+    app = FastAPI()
+    app.include_router(rn.router)
+    app.dependency_overrides[get_current_user] = lambda: {"user_id": member, "role": "user"}
+    app.dependency_overrides[get_db] = lambda: env
+    return TestClient(app)
+
+
+def test_a_member_written_device_row_puts_only_fixed_words_on_the_panel_and_control(env, monkeypatch):
+    """PRIVACY: the create route lets a member post ANY type with any words, so the type is no proof the text is fixed. The
+    panel's card says only the fixed words of each device kind (``PANEL_DEVICE_TEXT``) and never reads a stored title or
+    message. Negative control run 2026-11-28: ``panel_card`` rendering device rows with ``_note_item`` (the stored words) again
+    -> the posted words on the kiosk, red here. In-test control: the member's own card still shows the words they posted."""
+    m = _member_create(monkeypatch, env, MEMBER)
+    for t in ns.PANEL_DEVICE_TYPES:
+        r = m.post("/api/notifications/", json={"type": t, "title": f"zebra title {t}", "message": f"the violet secret {t}"})
+        assert r.status_code == 200, r.text
+    frame = _client(monkeypatch, GUEST, at_panel=True).post("/api/panel/notifications/open", json={}).json()
+    text = json.dumps(frame)
+    assert "zebra" not in text and "violet secret" not in text
+    shown = sorted((it["text"], it["meta"]) for it in frame["items"])
+    assert shown == sorted(ns.PANEL_DEVICE_TEXT.values()) and all(it["open"] == "settings" for it in frame["items"])
+    mine = json.dumps(run(ns.card(PANEL, MEMBER)))                                     # control: the member's own card keeps them
+    assert all(f"violet secret {t}" in mine for t in ns.PANEL_DEVICE_TYPES)
+
+
+def test_the_private_row_is_decided_over_the_whole_table_not_the_rows_read_and_control(env, monkeypatch):
+    """PRIVACY / honesty: the "Some are private" row is decided by its own query, so 600 newer device notices (more than the
+    card's 500-row read) cannot hide one older private row. Negative control run 2026-11-28: the decision back to "any
+    non-device row among the rows read" -> no locked row, red here. In-test control: with the private row cleared, no
+    locked row is shown."""
+    _raw(env, "old", MEMBER, "reminder", "Reminder", "an older private reminder")
+    env.conn.executemany("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) "
+                         "VALUES (?, ?, 'omi_health', 'Pendant', 'x', '{}', 0, ?)",
+                         [(f"h{i:04d}", MEMBER, f"2999-01-01T00:{i // 60:02d}:{i % 60:02d}") for i in range(600)])
+    env.conn.commit()
+    ids = [it["id"] for it in run(ns.panel_card(PANEL))["items"]]
+    assert "locked" in ids
+    env.conn.execute("UPDATE notifications SET delivered = 1 WHERE id = 'old'")
+    env.conn.commit()
+    assert "locked" not in [it["id"] for it in run(ns.panel_card(PANEL))["items"]]   # control
+
+
+def test_a_press_announces_a_folded_kind_by_kind_past_any_read_window_and_control(env, monkeypatch):
+    """VOICE PATH: a folded row (``omi_sync``) stands for its whole backlog and its Clear takes the whole kind, so a press marks
+    the WHOLE kind announced - all 600 here, past the old 500-row read. Negative control run 2026-11-28: ``shown_ids`` reading
+    the kind from ``unread(member, limit=500)`` again -> 100 rows not announced, red here. In-test control: a row of another
+    kind past the card's cap is NOT announced."""
+    env.conn.executemany("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) "
+                         "VALUES (?, ?, 'omi_sync', 'Pendant synced', 'x', '{}', 0, ?)",
+                         [(f"s{i:04d}", MEMBER, f"2999-01-01T00:{i // 60:02d}:{i % 60:02d}") for i in range(600)])
+    for i in range(9):
+        _raw(env, f"n{i}", MEMBER, "note", f"Note {i}", "words")
+    c = _client(monkeypatch, {"user_id": MEMBER, "role": "user"}, at_panel=False)
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()
+    assert len(frame["items"]) == ns.MAX_CARD
+    told = ns.ANNOUNCED[MEMBER]
+    assert {f"s{i:04d}" for i in range(600)} <= told
+    assert {f"n{i}" for i in range(9)} - told                                          # control: a note past the cap is still untold

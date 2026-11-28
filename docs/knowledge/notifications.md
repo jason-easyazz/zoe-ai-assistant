@@ -47,16 +47,17 @@ it says in words only what is about the household's kit, and nothing about what 
 
 | kind | on the panel's card |
 |---|---|
-| `omi_health`, `omi_sync`, `panel_speaker` (`PANEL_DEVICE_TYPES`): fixed text about a pendant's battery / storage, a finished sync, the panel's speaker ID; nothing of a member's in it | words, and anyone at the panel may **Clear** it (and Clear all takes them) |
+| `omi_health`, `omi_sync`, `panel_speaker` (`PANEL_DEVICE_TYPES`): fixed text about a pendant's battery / storage, a finished sync, the panel's speaker ID; nothing of a member's in it | the FIXED words of its kind (`PANEL_DEVICE_TEXT`, written in code: the row's stored title / message are never read for the panel, because a member can create a row of any type with any words), and anyone at the panel may **Clear** it (and Clear all takes them) |
 | EVERY other kind: a member's ask (`wearer_confirm`, `transcript_check`), the owner alert (`ops_alerting_broken`), a fired reminder's words, a note Zoe wrote, `distress_handoff`, any new type | inside ONE row, "Some are private": no title, no words, **no count** (the same row for one waiting as for twenty); a tap opens the mic |
 
 Never whose, never which private thing, never how many; sensitive rows are absent, as they are from the kiosk dot. Only a device
 notice is in the card's token at all, so a forged tap on any other row is 404. Its taps are honoured only for the panel itself
 (`_require_card` applies the panel rule; `panel_review_cards.authorize` refuses a panel token everywhere else). A new type is
-inside the locked row until it is added to `PANEL_DEVICE_TYPES`: fail closed.
+inside the locked row until it is added to `PANEL_DEVICE_TYPES`: fail closed. Whether the locked row shows is its own query over every unread row (`_any_private`), so newer
+device notices past the card's read cannot hide it.
 
 **A press tells the member only what it showed.** A member's own press marks as announced the rows ON the card
-(`notifications_store.shown_ids`: each item's row, and every row a folded kind stands for), not every unread row: the ones past
+(`notifications_store.shown_ids`: each item's row, and a folded kind BY KIND - every unread row of it, as its Clear takes them), not every unread row: the ones past
 the card's eight were never seen, so the spoken tail still mentions them.
 
 **The flag.** `ZOE_NOTIFICATIONS_PANEL_TOUCH` = `on` (default) | `off`, read per call. Off = the press is exactly the old one:

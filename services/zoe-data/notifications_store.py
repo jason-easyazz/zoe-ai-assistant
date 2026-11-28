@@ -51,6 +51,14 @@ COLLAPSE_TYPES = frozenset({"omi_sync"})   # many rows that say one thing: ONE r
 # no title, no words, no count, so the panel never says which private thing is waiting or how many. A tap on it opens the mic.
 PANEL_MEMBER = "__panel__"         # the ``member_id`` of a card minted for the panel itself; never an account id
 PANEL_DEVICE_TYPES = ("omi_health", "omi_sync", "panel_speaker")
+# What the panel's card SAYS for a device notice: fixed words per kind, written here. The row's stored title and message are never
+# read for the panel - a member can create a row of any type with any words (``POST /api/notifications``), so the type alone proves
+# nothing about the text. A member's own (verified) card still shows the stored words.
+PANEL_DEVICE_TEXT = {
+    "omi_health": ("Pendant", "A pendant needs a look: its battery or its storage."),
+    "omi_sync": ("Pendant synced", "New recordings came in from a pendant."),
+    "panel_speaker": ("Speaker ID", "Speaker ID on the panel is not working: everyone here is treated as a guest."),
+}
 # PLAIN = the panel itself may show and clear the row. Text SQL that reads the same on Postgres and SQLite (``data`` is TEXT), and it
 # FAILS CLOSED: no payload, or a JSON object that does not mention "sensitive" anywhere. So every truthy form (true, 1, "true",
 # ``"sensitive":true``) is private, and so is a payload that is not an object (malformed, cut short) - stricter than
@@ -667,11 +675,38 @@ async def panel_card(panel_id: str) -> Optional[dict]:
             continue
         key = f"n{len(items) + 1}"
         reg[key] = _reg_note(n, True)
-        items.append(_note_item(key, n, True))
-    if any(n["type"] not in PANEL_DEVICE_TYPES for n in rows):
+        items.append(_device_item(key, n))
+    if await _any_private(_member):                    # decided over the whole table, not over the rows read above
         items.insert(min(len(items), MAX_CARD - 1),    # the locked row always fits
                      {"id": "locked", "text": LOCKED_TEXT, "meta": LOCKED_META, "open": "voice", "actions": []})
     return _frame(panel_id, PANEL_MEMBER, items, reg, private=False, touch=True)
+
+
+def _device_item(key: str, n: dict) -> dict:
+    """A device notice on the PANEL's card: the fixed words of its kind (``PANEL_DEVICE_TEXT``) and the screen of its kind - nothing
+    stored in the row (title, message, ``data.open``) is read, so a row a member wrote cannot put words on the kiosk."""
+    title, meta = PANEL_DEVICE_TEXT[n["type"]]
+    earlier = int(n.get("earlier") or 0)
+    return {"id": key, "text": title, "meta": meta + (f" (and {earlier} earlier)" if earlier else ""),
+            "actions": [{"key": "done", "label": "Clear"}], "open": OPEN_BY_TYPE[n["type"]]}
+
+
+async def _any_private(is_member) -> bool:
+    """Is anything waiting at the panel that is NOT a device notice (so the one "Some are private" row is shown)? Its own query over
+    every unread plain row of a member, newest first, stopping at the first that passes the same checks as the card's rows - so any
+    number of newer device notices cannot hide it. Sensitive rows are absent, as from the kiosk dot."""
+    kinds = ", ".join(f"'{t}'" for t in PANEL_DEVICE_TYPES)
+    async with _db() as db:
+        for page in range(0, 1_000_000, 200):
+            cur = await db.execute(f"SELECT user_id, data FROM notifications WHERE delivered = 0 AND {_NO_RECEIPTS} AND {_PLAIN} AND "
+                                   f"{_OF_A_MEMBER} AND type NOT IN ({kinds}) ORDER BY created_at DESC, id LIMIT 200 OFFSET ?", (page,))
+            batch = await cur.fetchall()
+            for uid, data in batch:
+                if not _sealed(data) and _account(str(uid)) and is_member(str(uid)):
+                    return True
+            if len(batch) < 200:
+                return False
+    return False
 
 
 async def _clear_plain(db, where: str, params: tuple, how: str) -> int:
@@ -741,9 +776,13 @@ async def shown_ids(member: str, frame: dict) -> set:
     held = prc.peek(str(frame.get("card_token") or ""))
     regs = list(held.items.values()) if held is not None else []
     ids = {str(v.get("nid") or v.get("ref")) for v in regs}
-    kinds = {v["kind"] for v in regs if v.get("kind")}
-    if kinds:
-        ids.update(r["id"] for r in await unread(member, limit=500) if r["type"] in kinds)
+    kinds = sorted({v["kind"] for v in regs if v.get("kind")})
+    uid = _account(member)
+    if kinds and uid is not None:                      # a folded row stands for its WHOLE kind - announced by kind, as it is cleared
+        async with _db() as db:
+            cur = await db.execute("SELECT id FROM notifications WHERE user_id = ? AND delivered = 0 AND type IN ("
+                                   + ", ".join("?" for _ in kinds) + ")", (uid, *kinds))
+            ids.update(str(r[0]) for r in await cur.fetchall())
     return ids
 
 
