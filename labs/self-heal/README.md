@@ -491,3 +491,41 @@ a hostile or prompt-injected engine can land code that passes the gate.
 - **The `self-heal` label must exist** or `gh pr create` fails (step 1 creates it).
 - **`verify` treats "deployed" as "an ancestor of local `refs/heads/main`"**, which is the live
   checkout's branch on this box (deploy fast-forwards it). A different deploy model needs a different check.
+
+## v4: the complete loop in the lab (engine protocol, local landing, loop driver)
+
+Lab only, nothing installed, no real engine run. Fake engine, fake health probe, scratch repos.
+
+### The engine adapter protocol (`selfheal/proposer.py`): `propose(fault_packet) -> patch`
+
+The v1 engines edit a worktree in place: the engine process sees the whole checkout. The protocol
+narrows that to one call. An adapter (Codex CLI, Claude Code CLI, a local model) gets a PACKET and
+returns a PATCH; the loop checks and applies it. `ProposerEngine` bridges any adapter into the
+runner's existing engine seam, so the diff policy, the gates and the landing are unchanged.
+
+| part | contract | enforced by |
+|---|---|---|
+| packet: what the engine may see | ticket id, fault class, the test node id, a relative reproduction line, the test's output, the text of the files in scope (the reproducing test file + the tracked modules it imports, at most 8, 40 kB each), the allow-list, the budgets, the attempt number, the previous refusal as a reason TOKEN | `build_packet` |
+| never secrets | file text comes from the BASE COMMIT (`git show`), never the disk, so an untracked or ignored file cannot enter; a file on the forbidden list or a secret path (`*.pem`, `*.key`, `*secret*`, `*token*`, `*.db`, `data/*`, ...), a pinned file, a symlink, a binary or a file holding a secret-shaped string is WITHHELD (counted, not cleaned: a mangled file cannot be patched) | `sendable`, `redact(personal=False)` |
+| never household data | the failure text comes from a sandboxed re-run at the base commit (no home, no state dir, no network: the planted file is unreadable there), then `redact`: token shapes, key blocks, JWTs, URL credentials, values of secret-named keys, e-mail addresses, coordinates, IPs, long digit runs, home paths; capped at 4000 characters | `build_packet`, `redact` |
+| allowed output | a git-style unified diff; text edits to `allow_edit` (the in-scope NON-test files) and NEW files matching `allow_new` (a new `test_*.py` beside the reproduction). No rename, copy, delete, chmod, symlink, binary, path outside the list, `..`, `.git`, the gates' scratch dir; at most 64 kB and the diff-line cap. Hunk bodies are counted, so a header look-alike inside a hunk is body and a header smuggled past a short hunk is refused | `parse_patch`, `check_patch`, then `git apply`, then the runner's own `inspect_worktree` + `check_diff` on the real tree |
+| budgets | wall clock by the caller's clock (a late answer is abandoned and refused); turns and tokens as the engine REPORTS them (`engine_max_turns` 40, `engine_max_tokens` 400000; config may only lower them); unreported stays `None`, never zero | `_call`, `ProposerEngine.run`, `Config.validate` |
+
+Adapters in the lab: `ScriptedProposer` (the fake: canned good / wrong / malicious / oversized /
+over-budget answers in `tests/canned.py`) and `DryRunProposer`, which returns the command lines a
+named CLI adapter (`codex`, `claude`) WOULD run, built by the same asserted argv builders as the v1
+engines, with the prompt shown as a length and a hash. It starts no process and opens no socket
+(`test_dry_run_prints_the_command_and_executes_nothing`: a stub CLI that would leave a marker never
+runs; the negative control runs the stub by hand and the marker appears).
+
+A real CLI adapter (NOT built, NOT run) would: write the packet's files into a fresh directory,
+`git init` it, run the CLI there with the built-in flag set and the engine environment allow-list,
+then `git diff` that directory to build the patch. The engine would never see the checkout. Unproven
+until an attended run: whether each CLI works in a directory that holds a few files and no project
+context, how it reports turns and tokens, and what a fix costs.
+
+Honest limits. `redact` is pattern-based: it cannot recognise free-text personal detail. That is
+kept out by where the text comes from, not by the patterns: tracked files at a commit, and output
+of a sandboxed process that cannot read the home or the state dir. A repo that itself tracks personal
+data would leak it; the public repo rule and the secret-path list are the guards. The packet DOES go
+to the engine vendor's cloud: "no GitHub" is possible, "offline" is not.

@@ -306,7 +306,7 @@ class Runner:
                 self.audit("live_guard", "ALARM", ticket.id, reason="live_head_changed")
                 return self._finish(state, ticket, "discarded", why="live_checkout_changed")
             if not res.ok:
-                return self._finish(state, ticket, "discarded", why="engine_failed")
+                return self._finish(state, ticket, "discarded", why=getattr(res, "reason", "") or "engine_failed")
 
             # inspect BEFORE anything is staged; a violation discards the worktree, nothing staged
             self.step("diff_policy", ticket.id)

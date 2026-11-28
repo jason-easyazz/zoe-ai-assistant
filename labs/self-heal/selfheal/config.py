@@ -57,6 +57,7 @@ DEFAULT_FORBIDDEN = [
 HARD_FORBIDDEN = tuple(DEFAULT_FORBIDDEN)
 MAX_DAILY_CAP, MAX_PER_FAULT_CAP, MAX_DIFF_LINES, MAX_PARK_AFTER = 3, 2, 300, 2
 MAX_SANDBOX_MEM_MB, MAX_SANDBOX_PROCS, MAX_SANDBOX_DISK_MB = 2048, 64, 256
+MAX_ENGINE_TURNS, MAX_ENGINE_TOKENS = 40, 400_000   # the propose() budgets, as the engine reports them
 HARD_QUIET = ("01:30", "05:00")
 # The live checkout of THIS box, refused as repo / integration / apply target / worktree parent
 # whatever the config says (`live_checkout` in the config is an ADDITIONAL refused path).
@@ -127,6 +128,8 @@ class Config:
     engine_fallbacks: list = field(default_factory=list)   # tried in order when `engine` is unavailable
     multica_kill_switch: str = str(HOME / ".zoe" / "multica_dispatch_paused")   # read, never touched
     engine_timeout_s: int = 600
+    engine_max_turns: int = MAX_ENGINE_TURNS      # propose() budgets (selfheal/proposer.py); may only be lowered
+    engine_max_tokens: int = MAX_ENGINE_TOKENS
     codex_bin: str = "codex"         # basename must be `codex`
     codex_args: list = field(default_factory=list)    # REFUSED unless empty: no extra engine flags
     claude_bin: str = "claude"       # basename must be `claude`
@@ -217,7 +220,8 @@ class Config:
         for name, cap in (("daily_cap", MAX_DAILY_CAP), ("per_fault_cap", MAX_PER_FAULT_CAP),
                           ("diff_line_cap", MAX_DIFF_LINES), ("not_healed_park_after", MAX_PARK_AFTER),
                           ("sandbox_mem_mb", MAX_SANDBOX_MEM_MB), ("sandbox_procs", MAX_SANDBOX_PROCS),
-                          ("sandbox_disk_mb", MAX_SANDBOX_DISK_MB)):
+                          ("sandbox_disk_mb", MAX_SANDBOX_DISK_MB),
+                          ("engine_max_turns", MAX_ENGINE_TURNS), ("engine_max_tokens", MAX_ENGINE_TOKENS)):
             v = getattr(self, name)
             if not isinstance(v, int) or v < 0 or v > cap:
                 raise ValueError(f"{name}={v!r}: caps may only be lowered (0..{cap})")

@@ -25,6 +25,7 @@ class EngineResult:
     ok: bool
     detail: str          # "rc=N" / "timeout" ONLY: model output is never kept or logged
     seconds: float
+    reason: str = ""     # a proposer refusal: one token from proposer.REASONS, never text
 
 
 def build_prompt(ticket: Ticket, cfg: Config) -> str:
