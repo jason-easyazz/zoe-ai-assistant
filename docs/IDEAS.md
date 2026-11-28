@@ -39,11 +39,11 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - **A wake verifier on the panel** (OHF voice-support): a small decoder against the wake phrase, background speech and measured confusables, calibrated on the panel's own clips; the third arm after the energy and VAD gates.
 - **Backchannels keep the reply going** (Pipecat): once duck-decide-resume is on, a barge that is only "mhm" or "yeah" resumes and stays out of the history.
 - **Ask before opening the follow-up window?** (Home Assistant): a shadow count of follow-up turns after replies that asked nothing, then decide.
-- **Person merges are proposals** (Graphiti): "<speaker>'s dad" keyed to the speaker, a fuzzy gate for suggestions only, never an automatic same-name merge of people.
+- **Person merges are proposals** (Graphiti): a relative stored as the speaker's relative, keyed to the speaker, a fuzzy gate for suggestions only, never an automatic same-name merge of people.
 - **An extractor watermark per member, advanced only after a run succeeds** (the inverse of Letta's bug).
 - **The vector index as a derived index** (Hermes): an index failure marks it stale, recall falls back to the database, the canonical write never waits on it, and nothing rebuilds on the live path.
 - **A security rule file built from Zoe's own fixed bugs** (OpenClaw's 145 advisory rules): one blocking rule per fixed bug, starting with "every door and side door calls the kernel" and "no role check on a display name".
-- **"Every skill listed exists"** (Hermes): a names-only listing for the agent lane, so a skill that was not loaded is not declared impossible.
+- **A names-only skill listing for the agent lane** (Hermes): the model is told every listed skill is real, so a skill that was not loaded is not declared impossible.
 - **An owner-readable "what you hear, when" page** (linux-voice-assistant `docs/behavior.md`): phase by phase, what the panel plays and what happens to the music.
 
 ### (Jason: annotate) — 💡 pinned

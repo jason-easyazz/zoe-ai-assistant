@@ -214,11 +214,11 @@ reproduced live. Record: [deep reads](research/deep-reads-2026-11-29.md) (faults
 
 - **Under item 1 (the record):** a call is saved before it runs, and an unanswered side-effecting call is "may have run", never re-sent
   (a closed read-only list decides); accepted input is recorded before the brain is called, and after a restart a turn resumes without
-  replay under its original requester, rechecked, or gets "restarted before it ran"; card rules: expired is not denied, only the
+  replay under its original requester, rechecked, or gets a short note that it restarted before the request ran; card rules: expired is not denied, only the
   requester or an admin answers, never reopened, show the whole action or offer only No, arguments frozen at the yes; two speakers merged
   into one turn act at the lower authority; a reminder is done only when a device acknowledged it, and a member's result never goes to a
   guessed panel. Telegram delivery truth: a send that timed out after it left is classed "retry" today (confirmed), so a retry can
-  deliver twice; lost sends become uncertain, with a visible "may be a duplicate" marker; a brain error on Telegram sends one notice
+  deliver twice; lost sends become uncertain, with a visible marker that a message may be a repeat; a brain error on Telegram sends one notice
   instead of nothing (confirmed silent today).
 - **Under item 2 (the harness):** a live-model lane that runs the same scenarios on the real voice brain (errored runs stay in the
   denominator, infrastructure failures unscored, contested cells from 3 to 6 runs, harm scores 0); scenarios as request-plus-evidence
@@ -234,7 +234,7 @@ reproduced live. Record: [deep reads](research/deep-reads-2026-11-29.md) (faults
   one unattended-run contract for every night-lane prompt.
 - **Under item 5 (What Zoe did, permissions):** when a person's access narrows, their pending confirmations and queued or routine work
   stop, and widening never widens work already accepted; routines run with their creator's current cells; a routine's standing grant is
-  tied to its exact definition, with a Revoke row; guest grants expire unless "forever" is said (no expiry today, confirmed); a failed
+  tied to its exact definition, with a Revoke row; guest grants expire unless a permanent grant is asked for (no expiry today, confirmed); a failed
   routine tells the person who made it, once per cause per day, and clears silently on success; a narrower cell intersects with the
   defaults, never replaces them.
 - **Under item 8 (skill manifests):** re-installing a manifest is hashed, and a wider ceiling waits for an adult (it is replaced
@@ -242,7 +242,7 @@ reproduced live. Record: [deep reads](research/deep-reads-2026-11-29.md) (faults
   skills is a draft with the previous version kept; install checks fail closed.
 - **Under item 9:** the decline ladder (1, 7, 30 days) keyed on member, kind and subject, a never-re-offer latch and at most 5 pending
   offers (a flat 24 hours today, confirmed); a busy session queues the next request under its own speaker instead of "Please wait"
-  (confirmed on chat); one event list per voice turn with error codes; a reassurance is a "still", never a result.
+  (confirmed on chat); one event list per voice turn with error codes; a reassurance only says the work is still going, never a result.
 - **Under item 10:** incidents for scheduled jobs (alert once per cause, re-arm on success, an acknowledgement); a label for how the
   last run ended at boot; deploys restart when idle with a loop breaker; a "Check Zoe" page on the panel (fixable versus needs an adult).
 - **New: late reminders say they are late.** A one-shot reminder found past its grace is spoken with when it was due and recorded as
