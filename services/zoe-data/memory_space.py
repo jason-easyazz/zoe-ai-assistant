@@ -22,8 +22,10 @@ Pure of HTTP: the router (``routers/memories.py``) turns :class:`SpaceRefused` i
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import re
+import time
 from typing import Any, Optional
 
 import memory_provenance as mp
@@ -141,8 +143,71 @@ def provenance_label(it: Any) -> str:
     return f"{base} ({day})" if kind == "inferred" else f"{base} on {day}"
 
 
-def _item(it: Any) -> dict:
-    return {
+#: the STAGE of a row on the owner's own page, in four plain words, derived ONLY from the stored authority class / writer
+#: (``memory_authority.RANK``), never from a model's judgement:
+#:   added     - curated (6) or operator (6): someone else (a grown-up, an admin) put it there for the member
+#:   confirmed - user_confirmed (5): the member approved it (the review page, a day review)
+#:   told      - user_stated (4): the member's own words, or a deterministic extractor over them
+#:   noticed   - user_stated_derived (3) and every lower class: Zoe's reading of what they said, a guess until confirmed
+STAGE_LABELS = {"added": "Added for you", "confirmed": "Confirmed", "told": "You told me", "noticed": "I noticed"}
+
+#: the channel a writer stands for, in the member's words (``came_from.channel``); an unknown writer has no channel, never a guess
+CHANNEL_LABELS = {"voice": "By voice", "chat": "In chat", "pendant": "From your pendant"}
+_CHAT_WRITERS = frozenset({"chat", "chat_regex", "chat_regex_fallback", "conversation", "conversation_correction", "turn_digest"})
+
+
+def stage_of(it: Any) -> str:
+    """``added`` | ``confirmed`` | ``told`` | ``noticed`` for a gathered item (see :data:`STAGE_LABELS`). Pure."""
+    import memory_authority as auth
+
+    origin = str(getattr(it, "origin", "") or "")
+    cls = str(getattr(it, "cls", "") or "")
+    if origin == CURATED_ORIGIN or cls in (auth.CURATED, auth.OPERATOR):
+        return "added"
+    if cls == auth.USER_CONFIRMED or origin == "omi_review":
+        return "confirmed"
+    if cls and auth.RANK.get(cls, -1) >= auth.USER_RANK:
+        return "told"
+    return "noticed"   # an unknown or unread class is the weakest stage, never promoted
+
+
+def channel_of(meta: Optional[dict]) -> str:
+    """``voice`` | ``chat`` | ``pendant`` | "" from the row's stored writer (``source`` / ``origin``). Pure."""
+    import memory_authority as auth
+
+    meta = meta or {}
+    writers = {str(meta.get("source") or "").strip(), str(meta.get("origin") or "").strip()} - {""}
+    if any(w.startswith("omi") for w in writers):
+        return "pendant"
+    if writers & auth.VOICE_LANE_WRITERS or any(w.startswith("voice") for w in writers):
+        return "voice"
+    if writers & _CHAT_WRITERS:
+        return "chat"
+    return ""
+
+
+def came_from(it: Any) -> dict:
+    """Where a row came from, for its OWNER's page: ``{quote, channel, channel_label, day, kept}``. Pure.
+
+    ``quote`` is the owner's OWN words only (``provenance_answers.owner_quote``: the excerpt of a per-turn writer after the
+    own-words wall - never a pasted text, an unverified voice, a model's paraphrase or another speaker's words). A row that keeps
+    a source the wall will not quote (a pendant recording, a curator's note, a transcript pass) gives the day and channel only
+    (``kept`` True, ``quote`` ""); a row with no source record at all is ``kept`` False ("source not kept").
+    """
+    meta = getattr(it, "meta", None) or {}
+    try:
+        quote = pa.owner_quote(meta, getattr(it, "text", "") or "") if meta else ""
+    except Exception:  # noqa: BLE001 - a quote that cannot be checked is not shown
+        quote = ""
+    channel = channel_of(meta)
+    kept = bool(quote or str(meta.get("source_excerpt") or "").strip() or str(meta.get("user_turn_id") or "").strip())
+    return {"quote": quote, "channel": channel, "channel_label": CHANNEL_LABELS.get(channel, ""),
+            "day": _when(getattr(it, "epoch", None)), "kept": kept}
+
+
+def _item(it: Any, mutes: Optional[list] = None) -> dict:
+    stage = stage_of(it)
+    out = {
         "id": it.id,
         "text": _clean(it.text),
         "when": _when(it.epoch),
@@ -151,7 +216,15 @@ def _item(it: Any) -> dict:
         "source": "inferred" if it.inferred else "told",
         "provenance": provenance_kind(it),
         "provenance_label": provenance_label(it),
+        "stage": stage,
+        "stage_label": STAGE_LABELS[stage],
+        "came_from": came_from(it),
     }
+    if mutes is not None:   # None = the mute list is unknown (restraint not enforcing, or the read failed): say nothing
+        import restraint
+
+        out["muted"] = bool(restraint.muted(it.text, str(it.id), mutes))
+    return out
 
 
 def group_key(it: Any) -> str:
@@ -161,12 +234,13 @@ def group_key(it: Any) -> str:
     return it.group
 
 
-def build_view(known: "pa.Known") -> dict:
+def build_view(known: "pa.Known", *, mutes: Optional[list] = None, let_go: Optional[list] = None) -> dict:
     """The wire shape of what Zoe knows, from an already-gathered, OWN-rows-only ``Known``. Pure.
 
     ``groups`` are non-empty only, in display order; each is ``{key, label, kind, entries|items, more}``. People are merged
     entries (one per person: name, relationship, facts) with no row id - a person is forgotten by voice, which asks for the PIN.
-    ``private`` maps a class to a COUNT. No private text ever appears.
+    ``private`` maps a class to a COUNT. No private text ever appears. ``mutes`` (the owner's ACTIVE, ENFORCED mutes) marks each item
+    ``muted``; ``let_go`` (already-walled rows, :func:`read_let_go`) is passed through; either None leaves its key out.
     """
     buckets: dict = {key: [] for key, _ in GROUP_LABELS}
     for it in known.items:
@@ -194,22 +268,125 @@ def build_view(known: "pa.Known") -> dict:
             continue
         if not rows:
             continue
-        groups.append({"key": key, "label": label, "kind": "items", "items": [_item(i) for i in rows[:GROUP_MAX_ITEMS]],
+        groups.append({"key": key, "label": label, "kind": "items", "items": [_item(i, mutes) for i in rows[:GROUP_MAX_ITEMS]],
                        "more": max(0, len(rows) - GROUP_MAX_ITEMS)})
     private = {PRIVATE_LABELS.get(c, c): len(v) for c, v in sorted((known.private or {}).items()) if v}
-    return {
+    view = {
         "groups": groups,
         "private": private,
         "unsure": int(known.unconfirmed or 0),
         # what the screen lists (people count once each) - NOT known.total, which also counts the private rows held back
         "total": sum(len(g.get("entries") or g.get("items") or []) + g["more"] for g in groups),
     }
+    if let_go is not None:
+        view["let_go"] = let_go
+    return view
+
+
+#: the "Let go" list: rows the store retired (``superseded`` / ``archived``), newest first, bounded. A forgotten (``rejected``)
+#: row is NEVER listed: forgotten means forever.
+LET_GO_STATUSES = ("superseded", "archived")
+LET_GO_MAX = 20
+#: why a row was let go, from a CLOSED list, only when the stored row says so (no reason = no reason shown)
+LET_GO_REASONS = {"replaced": "Replaced", "duplicate": "Duplicate", "expired": "Expired", "by_you": "Archived by you"}
+
+
+def _epoch_of(raw: Any) -> Optional[float]:
+    """An epoch from a stored number or ISO-8601 string, else None. Pure."""
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def let_go_reason(meta: dict, user_id: str, *, now: Optional[float] = None) -> str:
+    """The closed-list reason key for a retired row, or "" when the stored row does not say. Pure."""
+    meta = meta or {}
+    status = str(meta.get("status") or "").lower()
+    if status == "superseded":
+        return "replaced"
+    if status != "archived":
+        return ""
+    if str(meta.get("duplicate_of") or "").strip():
+        return "duplicate"
+    exp = _epoch_of(meta.get("expires_at"))
+    if exp is not None and exp <= (now if now is not None else time.time()):
+        return "expired"
+    if str(meta.get("reviewed_by") or "") == user_id:
+        return "by_you"
+    return ""
+
+
+async def read_let_go(user_id: str, *, svc: Any = None) -> list:
+    """The owner's retired rows for the "Let go" list, through the SAME walls as :func:`provenance_answers.gather`: own rows only,
+    forgotten entities dropped, no pasted / instruction-shaped / unverified / recorded-change rows, and a private class is left
+    out entirely (it is never text on this page). Read-only. Raises on a store failure (the caller leaves the list out)."""
+    import memory_authority as auth
+    import own_words
+
+    svc = svc or pa._svc_default()
+    rows: list = []
+    for status in LET_GO_STATUSES:
+        rows.extend(await asyncio.wait_for(svc.list_by_status(user_id=user_id, status=status, limit=pa.SCAN_LIMIT, strict=True),
+                                           pa.READ_BUDGET_S))
+    rows = await pa._drop_forgotten(user_id, rows, pa._row_words)
+    out = []
+    for ref in rows:
+        meta = ref.metadata or {}
+        text = (ref.text or "").strip()
+        if not text or not pa._owns(meta, user_id) or str(meta.get("status") or "").lower() not in LET_GO_STATUSES:
+            continue
+        if str(meta.get("memory_type") or "") == "state_change":
+            continue
+        if own_words.is_pasted_row(meta) or own_words.instruction_shaped(text) or auth.is_unverified(meta):
+            continue
+        if pa.sensitive_classes(text, meta):
+            continue
+        try:   # a guess no word of the owner's supports is never said back (gather's "unconfirmed" rule); unreadable = left out
+            if (str(meta.get("authority_basis") or "") in auth.NO_STANDING_BASES
+                    and auth.row_rank(meta, text) < auth.DERIVED_RANK):
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+        reason = let_go_reason(meta, user_id)
+        epoch = pa._row_epoch(meta)
+        out.append({"id": ref.id, "text": _clean(text), "when": _when(epoch), "epoch": epoch,
+                    "reason": reason, "reason_label": LET_GO_REASONS.get(reason, "")})
+    out.sort(key=lambda r: r["epoch"] or 0.0, reverse=True)
+    return out[:LET_GO_MAX]
+
+
+async def _enforced_mutes(user_id: str) -> Optional[list]:
+    """The owner's ACTIVE mutes when ``ZOE_RESTRAINT`` enforces them, else None. In ``shadow`` a mute is recorded but does not
+    bite, so the page must not say "muted"; a failed read is None too (unknown is never "not muted")."""
+    try:
+        import restraint
+
+        if restraint.mode() != "enforce":
+            return None
+        return list(await restraint.list_mutes_strict(user_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("memory_space: mute read skipped (%s)", type(exc).__name__)
+        return None
 
 
 async def read_view(user_id: str, *, svc: Any = None) -> dict:
-    """What Zoe knows about ``user_id`` (own rows only). Raises on a store failure - the caller says so, it never shows 'nothing'."""
+    """What Zoe knows about ``user_id`` (own rows only). Raises on a store failure - the caller says so, it never shows 'nothing'.
+    The "Let go" list and the mute marks are extras: their failure leaves their key out, never the view."""
     known = await pa.gather(user_id, svc=svc)
-    return build_view(known)
+    mutes = await _enforced_mutes(user_id)
+    try:
+        let_go = await read_let_go(user_id, svc=svc)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("memory_space: let-go read skipped (%s)", type(exc).__name__)
+        let_go = None
+    return build_view(known, mutes=mutes, let_go=let_go)
 
 
 #: a curated row (``origin="curator"``, memories-space 2.3 / owner D7 + D9): only an ADULT member's own word changes it

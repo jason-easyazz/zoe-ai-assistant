@@ -61,6 +61,13 @@ def test_about_me_harness_passes():
      "        if (!state.section) return false;\n        { const n0 = state.doc.getElementById('aboutMeNav'); if (n0) n0.hidden = false; }\n        try {"),
                                                                                                   # menu link shown while the flag is off
     ("        state.section.hidden = true;\n        clearHash();\n", "        state.section.hidden = true;\n"),         # close leaves #about-me: the menu link can't reopen
+    ("        if (it.stage_label) tags.appendChild(", "        if (false) tags.appendChild("),     # the stage is not shown
+    ("        if (src.quote) box.appendChild(el('q', 'am-quote', String(src.quote)));",
+     "        box.appendChild(el('q', 'am-quote', String(src.quote || it.source_excerpt || '')));"),   # a non-quote field drawn as words
+    ("        if (typeof keep.focus === 'function') keep.focus();\n", ""),                         # the safe button loses the focus
+    ("        if (data && Array.isArray(data.let_go) && data.let_go.length) list.appendChild(letGoBox(data.let_go));\n", ""),
+                                                                                                  # the Let go list is dropped
+    ("        if (it.muted === true) row.appendChild(el('p', 'am-note', MSG.muted));\n", ""),       # a muted row is not said to be muted
 ])
 def test_about_me_negative_controls(tmp_path, old, new):
     src = ABOUT.read_text(encoding="utf-8")
@@ -102,6 +109,15 @@ def test_every_api_literal_is_a_served_memories_route():
     for method, base, tail in calls:
         path = base + ("X" + tail if base.endswith("/") else "")
         assert any(m == method and p.match(path) for m, p in pats), f"{method} {path} is not served by routers/memories.py"
+
+
+def test_the_page_offers_no_mute_or_bring_back_route():
+    """No desktop control may offer an action its route cannot serve: the memories router has no mute / unmute / restore route,
+    so the module must not call one. Negative control run: ``ABOUT_ME_SRC`` pointed at a copy with a ``'/mute'`` call added ->
+    this test went red."""
+    src = Path(os.environ.get("ABOUT_ME_SRC") or ABOUT).read_text(encoding="utf-8")
+    for word in ("/mute", "/unmute", "/restore", "/bring-back"):
+        assert word not in src, word
 
 
 def test_nothing_new_is_precached():
