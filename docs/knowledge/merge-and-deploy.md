@@ -386,6 +386,9 @@ The rule itself lives in [scripts/AGENTS.md](../../scripts/AGENTS.md) ("Brain-wi
 - deploys (merges that trigger `deploy.yml`) pause from 02:25 (the window starts its pre-sleep phase at 02:30) until the window has finished (same 03:30 fallback);
 - agent test runs pause while the night window or `zoe-backup.service` is active;
 - any work at all pauses while `zoe-night-window.service` is active;
+- one-night override (2026-11-28): `~/.zoe/agent-tools/night-skip` holding the evening's date (`date +%F`) lifts the
+  01:55/02:25 fall-backs and that night's 02:20 deadline (the 04:00-04:55 replay slot still holds).
+  Per night only, never a running window; meant for a night whose window was cancelled, so it costs that night's 12B jobs and backup;
 - unchanged: nothing may hold `/tmp/zoe-brain-window.lock` or be a live lander past the window's 20-min busy grace
   (gone by 03:10). Since 2026-10-27 the lander enforces this itself against `night_busy.sh deadline` (the next 02:20):
   gate first, every wait deadline-bounded, no probe start with under 25 min left, lock held only for the probe, post-probe

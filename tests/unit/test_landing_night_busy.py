@@ -184,3 +184,72 @@ def test_deadline_ignores_an_active_night_window(rig):
     r = rig.run("night_busy.sh", "deadline", ZOE_LANDING_NOW_EPOCH=str(epoch(DAY, "02:55")),
                 FAKE_ACTIVE="zoe-night-window.service")
     assert r.returncode == 0 and r.stdout.strip() == str(epoch("2026-10-30", "02:20"))
+
+
+# ---- night-skip: the owner's one-night lift of the "never ran tonight" fall-backs (2026-11-28) -------------------
+# The file is written in the evening of D for the window that would run on D+1 (it holds D = "yesterday" in the early
+# hours), or after midnight with that day's own date. Negative controls run while writing these (each failed, then the
+# code was restored): `skip_night` made always-false (the lift tests fail), the `-1 day` branch removed (the evening-date
+# tests fail), the deadline hop loop removed (the deadline tests fail), and the active-window check removed (the
+# window-active test fails).
+
+NIGHT = "2026-10-29"           # the early-morning hours under test
+EVENING = "2026-10-28"         # the evening before, when the owner writes the file
+
+
+def night_skip(rig, value):
+    (rig.home / "night-skip").write_text(value + "\n")
+
+
+@pytest.mark.parametrize("value", [EVENING, NIGHT, f"  {EVENING} \t"])
+@pytest.mark.parametrize("kind", ["voice", "deploy"])
+@pytest.mark.parametrize("hhmm", ["02:00", "02:30", "03:00"])
+def test_night_skip_lifts_the_fallback_pause(rig, kind, hhmm, value):
+    if kind == "deploy" and hhmm == "02:00":
+        hhmm = "02:25"   # deploy's fall-back starts at 02:25; 02:00 already runs
+    night_skip(rig, value)
+    assert busy(rig, kind, hhmm, day=NIGHT) == RUN
+
+
+@pytest.mark.parametrize("value", ["2026-10-27", "2026-10-30", "2026-10-2", "always", "yes", ""])
+@pytest.mark.parametrize("kind,hhmm", [("voice", "02:00"), ("voice", "03:00"), ("deploy", "02:30")])
+def test_night_skip_stale_future_or_junk_keeps_the_pause(rig, kind, hhmm, value):
+    night_skip(rig, value)
+    assert busy(rig, kind, hhmm, day=NIGHT) == PAUSE
+
+
+@pytest.mark.parametrize("kind", ["voice", "deploy", "test"])
+def test_night_skip_never_overrides_a_running_window(rig, kind):
+    night_skip(rig, EVENING)
+    assert busy(rig, kind, "02:40", day=NIGHT, FAKE_ACTIVE="zoe-night-window.service") == PAUSE
+
+
+def test_night_skip_does_not_lift_the_backup_pause_for_tests(rig):
+    night_skip(rig, EVENING)
+    assert busy(rig, "test", "02:40", day=NIGHT, FAKE_ACTIVE="zoe-backup.service") == PAUSE
+
+
+@pytest.mark.parametrize("hhmm", ["07:00", "12:00", "21:59"])
+def test_night_skip_never_affects_daytime_voice(rig, hhmm):
+    night_skip(rig, NIGHT)
+    assert busy(rig, "voice", hhmm, day=NIGHT) == PAUSE
+    day_ok(rig, NIGHT)
+    assert busy(rig, "voice", hhmm, day=NIGHT) == RUN
+
+
+@pytest.mark.parametrize("hhmm", ["04:00", "04:30", "04:55"])
+def test_night_skip_never_lifts_the_replay_slot(rig, hhmm):
+    night_skip(rig, EVENING)
+    assert busy(rig, "voice", hhmm, day=NIGHT) == PAUSE
+
+
+def test_night_skip_deadline_moves_to_the_next_real_night(rig):
+    night_skip(rig, EVENING)
+    assert deadline(rig, "22:00", day=EVENING) == epoch("2026-10-30", "02:20")   # tonight's 02:20 has no deadline
+    assert deadline(rig, "01:00", day=NIGHT) == epoch("2026-10-30", "02:20")
+    assert deadline(rig, "12:00", day=NIGHT) == epoch("2026-10-30", "02:20")     # spent: tomorrow's night is real
+
+
+def test_night_skip_stale_date_leaves_the_deadline_alone(rig):
+    night_skip(rig, "2026-10-26")
+    assert deadline(rig, "22:00", day=EVENING) == epoch(NIGHT, "02:20")
