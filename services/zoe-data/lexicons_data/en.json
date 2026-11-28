@@ -1233,12 +1233,12 @@
   ]
  },
  "device_confirm": {
-  "_note": "device_confirm.py (ZOE_DEVICE_CONFIRM_GUARD): a SHORT transcript nothing claims, whose last content word is a light-like noun after a determiner, with a command-like verb before it and nothing after it but an on/off particle, gets ONE short question; a plain yes runs 'command'. Light-like nouns include the sound-alikes the panel's STT has produced for 'light' ('lot', 'lines', 'one', '1'); verbs include the fused forms of 'turn on' ('shown', 'shone') and the near-misses heard for 'turn' / 'switch' ('sound', 'do', '2'). 'of' is an off particle ('two of the one'). A fused on-verb or no particle at all offers the light ON.",
+  "_note": "device_confirm.py (ZOE_DEVICE_CONFIRM_GUARD): a SHORT transcript nothing claims, whose last content word is a light-like noun after a determiner, with a command-like verb before it and nothing after it but an on/off particle, gets ONE short question; a plain yes runs 'command'. Light-like nouns include the sound-alikes the panel's STT has produced for 'light' ('lot', 'lines', 'one', '1'); verbs include the fused forms of 'turn on' ('shown', 'shone') and the near-misses heard for 'turn' / 'switch' ('sound', 'do', '2'; 2026-11-28, a month of wake turns: 'tune', 'chill', 'chilling', and 'white' for the noun). 'of' is an off particle ('two of the one'). A fused on-verb or no particle at all offers the light ON.",
   "reviewed": true,
   "max_words": 6,
-  "nouns": ["light", "lights", "lamp", "lamps", "lot", "lots", "line", "lines", "one", "1"],
+  "nouns": ["light", "lights", "lamp", "lamps", "lot", "lots", "line", "lines", "one", "1", "white"],
   "determiners": ["the", "a"],
-  "verbs": ["turn", "turned", "turns", "switch", "switched", "flip", "flick", "shown", "shone", "show", "sound", "do", "2", "two"],
+  "verbs": ["turn", "turned", "turns", "switch", "switched", "flip", "flick", "shown", "shone", "show", "sound", "do", "2", "two", "tune", "chill", "chilling"],
   "on_words": ["on"],
   "off_words": ["off", "of"],
   "tail_ok": ["on", "off", "of", "please", "now"],
@@ -1246,6 +1246,14 @@
   "blockers": ["you", "your", "you're", "you've", "me", "us", "this", "that", "these", "those", "my", "every", "each"],
   "question": {"on": "Light on?", "off": "Turn the light off?"},
   "command": {"on": "turn on the light", "off": "turn off the light"}
+ },
+ "unclear_turn": {
+  "_note": "unclear_turn.py (ZOE_UNCLEAR_TURN_NOTE): the first words after a wake that no matcher claimed get a hearing note for the brain when they are SHORT ('max_words' after wake / politeness words are off), are not a question ('question_openers' as the first word, or a question mark), carry none of 'self_words' (a person talking about themselves or to Zoe about herself is making sense: the brain answers as always), are not one of 'plain_lines' (whole short lines that are clear as they stand), and carry no feeling (the distress and affect lexicons decide that, not this list).",
+  "reviewed": true,
+  "max_words": 6,
+  "question_openers": ["what", "what's", "whats", "where", "where's", "when", "who", "who's", "why", "how", "how's", "which", "is", "are", "am", "do", "does", "did", "have", "has", "can", "could", "will", "would"],
+  "self_words": ["i", "i'm", "im", "i've", "ive", "i'll", "i'd", "me", "my", "mine", "myself", "we", "we're", "we've", "we'll", "our", "us", "you", "you're", "youre", "you've", "you'll", "your", "yourself"],
+  "plain_lines": ["yes", "yeah", "yep", "no", "nope", "ok", "okay", "thanks", "thank you", "cheers", "hello", "hi", "hey", "good morning", "good night", "goodnight", "good evening", "good afternoon", "bye", "goodbye", "see you", "never mind", "nevermind", "stop", "cancel", "nothing", "sorry"]
  },
  "spacer": {
   "_note": "voice_spacer.py: the short spoken lines that fill a wait. 'families' are the pools by what the turn is doing (lookup = a read of stored data, recall = remembering, action = doing something, generic = nothing known); 'tool_ack' is the domain-specific pool for the dispatch-time acknowledgement. A line never claims a result. Wide on purpose: the same three lines on every turn read as a tic.",

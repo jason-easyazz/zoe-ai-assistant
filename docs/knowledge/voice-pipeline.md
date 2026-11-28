@@ -2163,6 +2163,76 @@ name; the identity doctrine lost its copyable "I'm Zoe." line. (4) Neutral parap
 rig test covers it. The spacer, claim-guard and doctrine changes do reach replayed brain turns: the lander runs the voice
 regression probe before deploy.
 
+## Unclear first turn — a hearing note for the brain (`ZOE_UNCLEAR_TURN_NOTE`, default ON, 2026-11-28)
+
+**The failure (reported by the owner, 2026-11-28).** The first thing said to the panel is misheard, and Zoe answers it as if the
+person were in trouble when they only wanted the light. The device confirm guard above catches the garbles its lexicon knows; the rest still reached the brain, which answered a
+few unrelated words as a confidence (a feelings reply, "what's on your mind").
+
+**Measured first** (a month of wake turns at the panel: 101 recordings joined to the Pi's `voice.log`, the service's own Moonshine
+path, under the harness lock; the per-clip results hold household words and stay outside the repo):
+
+| | |
+|---|---|
+| wake turns heard as a recognised command | 28 |
+| NOT recognised, said again within 30 s and then recognised | 21 (about 14 of them the light) |
+| chat / other | 34 |
+| empty | 18 |
+
+- Every wake clip has the same anatomy: the wake phrase at ~0.9-1.5 s (the wake fires at 1.60 s, the end of the 20-chunk pre-roll),
+  a gap of ~0.4-1.5 s, then the command. "A short lead burst, a gap, then speech" is true of 69 of the 101 clips, the correctly
+  heard ones included. It is not a mark of the failing turns.
+- **Cutting the wake phrase out of the audio does not repair the hearing — measured again, three ways.** Cut 0.2 s before the
+  command: 5 commands gained, 4 lost (69 clips). Cut just after the wake burst: 4 gained, 3 lost. Cut at the wake-fire instant
+  (the detector's own end time): 2 gained, 10 lost (101 clips). Of the 21 misheard-then-repeated turns a cut recovers 2, 1 and 1.
+  The garble is in the COMMAND burst and survives every cut as a different garble. This is the same wash the 54-clip measurement
+  under *1b* above recorded, and the rule there stands: **do not trim the pre-roll audio.**
+- Not dropped audio (wall clock vs captured audio over 121 wake recordings: median -0.01 s, max +0.10 s), not level or length
+  (command burst 0.71 s misheard vs 0.77 s recognised; command/wake level ratio 0.74 vs 0.78). Moonshine is simply unstable on a
+  ~0.7 s four-word command: the live STREAM transcript differs from an offline BATCH transcript of the same clip in 21 of 101, and
+  neither path is better.
+- The under-speech stream is fed from the same pre-roll (the daemon's `_PREROLL` ring, uploaded first by `_start_stt_stream`), so
+  it hears exactly the bytes of the WAV. The pre-roll is the daemon's; zoe-data adds none.
+- **Empty captures are false wakes, not late captures.** 11 of the 18 empty wake turns have no energy burst anywhere in the clip
+  (peak 0.003-0.033), the 1.6 s pre-roll included — and the pre-roll is the very audio the detector scored. The clip length
+  (4.64 s = 20 pre-roll chunks + the 3.04 s no-speech close) and the wall clock agree. The wake model fires on near-silent audio;
+  a floor on the pre-roll's energy at wake time would stop them. Not fixed here (different root cause, a daemon change).
+
+**What changed.**
+
+1. **Wake strip** (`stt_wake_strip.py`, text selection, no flag): three more renderings of the wake phrase that survived into 7 of
+   ~83 non-empty wake transcripts: a whole line "A Zoe." ("hey" heard as the article; whole line only), "Howdy, Zoe" (only with a
+   zoe-family name after it), and the fused spellings "Azoy" / "Azai".
+2. **Device confirm guard** lexicon: "tune" / "chill" / "chilling" as fused verbs and "white" as the noun (four of the month's
+   light garbles that the guard did not ask about).
+3. **Hearing note** (`services/zoe-data/unclear_turn.py`). `routers/voice_tts.voice_command` asks `_hearing_note_kwargs` just
+   before the brain is dispatched — after every fast tier, the STT snap and the device confirm guard passed on the words — and
+   passes `hearing_note=True` with that one brain call (an explicit argument; `brain_dispatch` drops it for any other lane) when it is the first after a WAKE (no follow-up / conversation window) at the PANEL and its words have the shape of a possible
+   mishear: at most 6 words, not a question, none of the speaker's own words ("I", "my", "you" ... : a person talking about
+   themselves makes sense), not a plain short line ("thank you", "good morning"), and no feeling in it (the distress lexicon at
+   any tier and the affect lexicon decide; data in `lexicons_data/en.json` "unclear_turn"). The Flue lane (`zoe_flue_client`) then
+   appends ONE delimited line after the user's words: these words may be misheard; if they plainly make sense answer as usual; if
+   not, say you didn't catch that and ask again, or ask whether a household request was meant; do not guess at a feeling, ask
+   what is on their mind, or bring up memory. It rides in the `[MEMORY CONTEXT … [END MEMORY CONTEXT]` pair the sidecar already
+   elides from older messages, so there is no sidecar or daemon change.
+
+**The floors are untouched.** The distress hand-off and the medical floor run in `run_flue_brain_streaming` before the brain turn
+is composed; the note is composed inside that turn, so a hand-off phrase never meets it, and `unclear_turn.shape` refuses every
+hand-off and gentle-tier phrase of `tests/fixtures/distress_labelled.json` (pinned).
+
+**Lab A/B on the live brain** (ten invented phrases, replay-isolated, note off vs on): the six nonsense lines went from a guess, a
+confabulated task or a feelings probe ("What's making you feel that way right now?", "What's on your mind ...?") to "I didn't catch
+that, could you say that again?" (three of them offering a light / timer / music reading); "tell a joke" was byte-identical,
+"sing a song" and a two-word tired line were still answered as what they are. The A/B ran without the member's card (no database
+pool in the lab process), so the live proof with the card present is an owner step after deploy.
+
+**Metric line** `UNCLEAR_TURN noted len=N utt=<hash>` (never the words). Kill switch: `ZOE_UNCLEAR_TURN_NOTE=0` (the wire is then
+byte-identical, pinned). Only the Flue lane reads the argument; a failover hop to another lane answers as before. Pinned by
+`services/zoe-data/tests/test_unclear_turn.py` (`ci_safe`).
+
+**Still open.** `ZOE_STT_SNAP` is `shadow` and `ZOE_MISHEAR_CLARIFY` is off on the box; the snap would have run one of the month's
+21 misheard turns. The hearing itself (Moonshine on a fast, quiet four-word command) is not improved by anything here.
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 **Not in the panel daemon (offline verdict 2026-11-04):** on 979 corpus turns every Smart Turn policy that cuts

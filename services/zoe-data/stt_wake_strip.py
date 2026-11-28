@@ -29,10 +29,15 @@ import re
 # only). Requires a following word (?=\S) so a bare name that IS the command stays.
 # Moonshine's NON-WORD renderings of "Hey Zoe" run together ("Azoi, turn the light" 2026-10-29: "Hey" + "Zoe" -> "Azoi"). Each is
 # a token no real command starts with, so they join the unambiguous family; "a zoe" / "a zo" are NOT here (real words follow "a").
-_MISHEARD_WAKE = r"azoi|azoie|azoe|azoey|a\s+zoi|a\s+zoie|a\s+zoey|zoi"
+# "Azoy" / "Azai" joined 2026-11-28 (two more spellings of the same fused sound, measured on a month of wake turns).
+_MISHEARD_WAKE = r"azoi|azoie|azoe|azoey|azoy|azai|a\s+zoi|a\s+zoie|a\s+zoey|zoi"
+# The greetings Moonshine writes before the name. "howdy" is a rendering of "hey" seen only in front of the wake name; it is
+# honoured only WITH a zoe-family name after it (never beside a weak homophone), so a real "Howdy, Joe" is untouched.
+_GREETING = r"hey|hi|ok|okay"
+_GREETING_WITH_NAME = rf"{_GREETING}|howdy"
 
 _WAKE_PREFIX_RE = re.compile(
-    r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
+    rf"^\s*(?:{_GREETING_WITH_NAME})?[\s,]*"
     # Inline strip uses ONLY unambiguous non-word wake variants. Real names/words
     # (joe, joey, josie, so) are deliberately EXCLUDED here — as an inline prefix
     # they would corrupt a real command ("Joe wants the weather", "so, add milk").
@@ -93,8 +98,10 @@ _MAX_FILLER_LOOKAHEAD = 2
 # word, never a wake. This is ALSO the confident matcher the filler lookahead
 # demands: skipping a filler reaches PAST it, so a stray "so" must not authorise
 # eating the line before it ("Well" / "so" / "what now").
+# "a" as the greeting ("A Zoe."): "Hey" heard as the article. Whole-line only - a line that is nothing but "A Zoe" is the wake
+# phrase, while inline ("a zoe ...") real words can follow the article, so _WAKE_PREFIX_RE does not take it.
 _STRONG_WAKE_LINE_RE = re.compile(
-    r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
+    rf"^\s*(?:{_GREETING_WITH_NAME}|a)?[\s,]*"
     rf"(?:{_MISHEARD_WAKE}|zoe|zoey|zoie|zoee|sewey)"
     r"[\s,.!?]*$",
     re.IGNORECASE,

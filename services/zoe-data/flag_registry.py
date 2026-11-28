@@ -1019,6 +1019,7 @@ _ENTRIES = (
     _f('ZOE_TTS_TRIM_SILENCE', 'bool', True),
     _f('ZOE_TURN_CONTINUATION_TTL_S', 'float', 60.0, doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_UNAUTHENTICATED_ROLE', 'str', 'guest', doc='docs/architecture/panel-anywhere.md'),
+    _f('ZOE_UNCLEAR_TURN_NOTE', 'bool', True, doc='docs/knowledge/voice-pipeline.md', note='2026-11-28: a short first turn after a wake that nothing claimed carries a hearing note to the brain (say you did not catch it; never read feelings into a garble); kill switch'),
     _f('ZOE_UPDATE_CHECK_ENABLED', 'bool', True),
     _f('ZOE_URL', 'str', 'https://zoe.local', doc='docs/knowledge/mac-virtual-panel.md', note='live: unset (code default in force)', divergent_ok={'scripts/maintenance/zoe_latency_probe.py': 'the probe runs on the host itself and defaults to loopback', 'scripts/setup/mac_panel/preflight.py': "reads the Mac daemon's own env mapping and REQUIRES ZOE_URL (fails when unset); it hard-codes no fallback"}),
     _f('ZOE_USER_MODEL_BLOCK', 'str', '', doc='docs/knowledge/user-model-ab.md'),
