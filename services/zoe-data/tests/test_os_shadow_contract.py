@@ -399,6 +399,98 @@ def test_the_lists_door_client_and_the_real_kernel_agree_on_verbs_codes_and_the_
         stop(proc)
 
 
+# ---- the reminders door (ZOE_OS_REMINDERS=kernel) against the real kernel -----------------------------------------------------------------
+def test_the_reminders_door_client_and_the_real_kernel_agree_on_verbs_codes_and_the_decision(state, monkeypatch):
+    """``reminder_service`` asks the REAL daemon on the area-neutral ops: an adult's edit of a child's reminder is allowed and
+    closed ``done``; a child's delete of an adult's household reminder is refused with the kernel's own code and nothing is
+    written; someone the roster does not name is refused, as actor and as the person a reminder is for. The kernel's file holds
+    ids only: never the title. Control run: with ``reminders`` left out of the kernel's areas (``Kernel.__init__``) every ask is
+    ``not_checked reason=protocol``, nothing is refused and this fails at the first ``ReminderRefused``."""
+    import reminder_service as rs
+
+    sys.path.insert(0, str(LAB))
+    try:
+        from zoe_os import door as kernel_door_mod, remind_door, wire
+    finally:
+        sys.path.remove(str(LAB))
+    area = os_shadow.AREAS["reminders"]
+    assert tuple(area.verbs) == tuple(remind_door.VERBS) and remind_door.AREA.name == "reminders"
+    assert (area.ask_op, area.report_op, area.target, area.parts, area.named) == ("door_ask", "door_report", "target", None, True)
+    assert {"area", "verb", "person", "via", "target", "parts", "owner", "visibility", "turn", "stamps"} == set(wire.OPS["door_ask"])
+    assert {"ask", "outcome", "stamps"} == set(wire.OPS["door_report"])
+    assert {kernel_door_mod.UNKNOWN_PERSON, kernel_door_mod.NOT_OWNER, kernel_door_mod.ADULTS_ONLY, kernel_door_mod.NOT_IN_MANIFEST} \
+        <= set(os_shadow.DOOR_REFUSALS) and set(rs.ReminderRefused.lines) <= set(os_shadow.DOOR_REFUSALS)
+    assert os_shadow.KERNEL_ERASED == kernel_door_mod.ERASED
+
+    kid, rid, word = "member-kid", "rem_bar_0001", "womble"
+
+    class _Cur:
+        def __init__(self, row):
+            self.row = row
+
+        async def fetchone(self):
+            return self.row
+
+    class DB:
+        def __init__(self, owner, visibility):
+            self.writes = []
+            self.row = {"id": rid, "user_id": owner, "title": word, "visibility": visibility, "due_date": "2099-06-15", "due_time": "08:00",
+                        "recurring_pattern": None, "is_active": 1, "acknowledged": 0, "deleted": 0, "snoozed_until": None}
+
+        async def execute(self, sql, params=()):
+            if sql.lstrip().upper().startswith("SELECT"):
+                return _Cur(dict(self.row))
+            self.writes.append(sql.split()[0])
+            return _Cur(None)
+
+        async def commit(self):
+            pass
+
+    async def _noop(*a, **k):
+        return None
+
+    for name in ("require_feature_access", "_cancel_reminder_jobs_safe", "_reschedule_reminder_due_safe"):
+        monkeypatch.setattr(rs, name, _noop)
+    monkeypatch.setattr(rs.broadcaster, "broadcast", _noop)
+    proc = start(state, [{"id": MEMBER, "role": "adult"}, {"id": OTHER, "role": "adult"},
+                         {"id": kid, "role": "child", "guardians": [MEMBER]}], monkeypatch)
+    try:
+        monkeypatch.setenv("ZOE_OS_LIST_SHADOW", "off")
+        monkeypatch.setenv("ZOE_OS_REMINDERS", "kernel")
+        monkeypatch.setattr(os_shadow, "ASK_DEADLINE_S", 2.0)      # a cold subprocess on a busy box; the deadline has its own test
+
+        def actor(who):
+            return {"user_id": who, "role": "user"}
+
+        async def run():
+            ok, own, refused = DB(kid, "family"), DB(kid, "personal"), DB(MEMBER, "family")
+            await rs.update_reminder_record(ok, actor(OTHER), rid, {"title": word + " two"})       # an adult, for a child
+            await rs.acknowledge_reminder_record(own, actor(kid), rid)                              # their own
+            out = []
+            for who, db in ((kid, refused), ("member-nobody", refused), (OTHER, DB("member-nobody", "family"))):
+                with pytest.raises(rs.ReminderRefused) as exc:
+                    await rs.delete_reminder_record(db, actor(who), rid)
+                out.append((exc.value.reason, db.writes))
+            return ok.writes, own.writes, out
+
+        assert asyncio.run(run()) == (["UPDATE"], ["UPDATE", "INSERT"], [("adults_only", []), ("unknown_person", []), ("unknown_person", [])])
+        end = time.monotonic() + 10
+        rows: list = []
+        while time.monotonic() < end and len(rows) < 2:
+            with closing(kernel_db(state)) as con:
+                rows = con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%\"done\"%'").fetchall()
+            time.sleep(0.05)
+        assert len(rows) == 2                                    # both allowed changes were reported and closed
+        with closing(kernel_db(state)) as con:
+            assert con.execute("SELECT COUNT(*) FROM intents WHERE receipt_seq IS NULL").fetchone()[0] == 0
+            assert con.execute("SELECT COUNT(*) FROM snapshot_dependencies").fetchone()[0] == 0
+            kept = [json.loads(p) for (p,) in con.execute("SELECT payload FROM events WHERE kind = 'action_receipt' AND payload LIKE '%allowed%'")]
+        assert sorted(p["action"] for p in kept) == ["reminder.done", "reminder.edit"] and all(p["reminder"] == rid for p in kept)
+        assert holds(state, word) == [] and holds(state, "member-nobody") == []
+    finally:
+        stop(proc)
+
+
 @needs_forget
 def test_the_real_kernel_orders_the_clients_asks_and_reports_against_its_forget(state, monkeypatch):
     """The three races of a door that has its own connection, against the REAL daemon, with the client's own stamps and forget:

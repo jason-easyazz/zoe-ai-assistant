@@ -434,7 +434,7 @@ def test_yes_to_leave_runs_the_reminder_writer(dbpath, monkeypatch):
 
     calls = []
 
-    async def fake(payload, *, user, db, now_utc=None, schedule=True):
+    async def fake(payload, *, user, db, now_utc=None, schedule=True, stamps_at=None):
         calls.append((payload.title, payload.due_date, payload.due_time, payload.visibility, user["user_id"]))
         return {"id": "rem-1"}
 

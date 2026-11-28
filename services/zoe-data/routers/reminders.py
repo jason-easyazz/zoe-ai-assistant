@@ -21,6 +21,7 @@ from reminder_service import (  # noqa: F401 - the two job helpers are re-export
     delete_reminder_record,
     row_to_dict,
     snooze_reminder_record,
+    stamps_now,
     update_reminder_record,
 )
 
@@ -41,7 +42,8 @@ async def create_reminder(
     db=Depends(get_db),
 ):
     """Create a new reminder."""
-    return await create_reminder_record(payload, user=user, db=db)
+    stamps_at = stamps_now()      # the Zoe OS reminders door is told who the reminder is for: stamped before anything is awaited
+    return await create_reminder_record(payload, user=user, db=db, stamps_at=stamps_at)
 
 
 @router.get("/", response_model=dict)

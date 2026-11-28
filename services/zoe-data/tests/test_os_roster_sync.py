@@ -510,9 +510,28 @@ def _takes_first(fn) -> bool:
             and getattr(value.func, "id", getattr(value.func, "attr", "")) == "stamps_now")
 
 
-def _scan(src: str) -> list:
-    """The functions that call ``create_list_record`` without ``stamps_at=stamps_at``, or whose ``stamps_at`` was not taken
-    first (a nested helper is judged by its outermost enclosing function)."""
+def _door_names(tree, door: str) -> set:
+    """Every name this module can call ``door`` by: its own name, ``from x import door as X``, and any CHAIN of plain rebindings
+    (``X = door`` / ``X = mod.door``, then ``Y = X``, then ``Z = Y`` ...). A fixed point: names bound from an already-known name
+    keep being added until nothing changes, so a caller cannot hide behind a second or third alias. (``mod.door`` after
+    ``import mod as m`` is matched by the attribute name.)"""
+    names = {door}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            names |= {a.asname for a in node.names if a.name == door and a.asname}
+    assigns = [n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None]
+    while True:
+        found = {t.id for n in assigns if getattr(n.value, "id", getattr(n.value, "attr", "")) in names
+                 for t in (n.targets if isinstance(n, ast.Assign) else [n.target]) if isinstance(t, ast.Name)} - names
+        if not found:
+            return names
+        names |= found
+
+
+def _scan(src: str, door: str = "create_list_record") -> list:
+    """The functions that call ``door`` (``create_list_record``; the reminders door reuses this for ``create_reminder_record``)
+    without ``stamps_at=stamps_at``, or whose ``stamps_at`` was not taken first (a nested helper is judged by its outermost
+    enclosing function)."""
     tree = ast.parse(src)
     _PARENTS.clear()
     for outer in ast.walk(tree):
@@ -520,18 +539,10 @@ def _scan(src: str) -> list:
             for inner in ast.walk(outer):
                 if inner is not outer and isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     _PARENTS.setdefault(id(inner), outer)
-    # every name this module can call the door by: its own name, ``from list_service import create_list_record as X``, and a
-    # plain rebinding ``X = create_list_record`` / ``X = list_service.create_list_record`` (``ls.create_list_record`` after
-    # ``import list_service as ls`` is matched by the attribute name)
-    names = {"create_list_record"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            names |= {a.asname for a in node.names if a.name == "create_list_record" and a.asname}
-        elif isinstance(node, ast.Assign) and getattr(node.value, "id", getattr(node.value, "attr", "")) == "create_list_record":
-            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    names = _door_names(tree, door)
     out = []
     for fn in ast.walk(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name == "create_list_record":
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name == door:
             continue
         calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                  and getattr(n.func, "id", getattr(n.func, "attr", "")) in names]
@@ -560,7 +571,8 @@ def test_every_caller_that_starts_a_list_takes_its_stamps_before_anything_it_awa
 
     Negative control (planted below): a caller that awaits first, one that passes nothing, one that passes a fresh snapshot
     one that reassigns ``stamps_at`` after an await, and one whose value merely CONTAINS a ``stamps_now()`` call are all
-    reported."""
+    reported. Alias resolution is a fixed point: a chain ``make = create; build = make`` is followed to its end (control run:
+    with the loop in ``_door_names`` cut to one pass, the planted ``thrice`` and ``annotated`` callers are not reported)."""
     modules = _modules()
     assert len(modules) > 100 and ROOT / "routers" / "lists.py" in modules
     for path in modules:
@@ -586,6 +598,14 @@ def test_every_caller_that_starts_a_list_takes_its_stamps_before_anything_it_awa
                "async def renamed_good(db):\n    stamps_at = ls.stamps_now()\n    await db.fetch('x')\n"
                "    await create(db, user_id='u', stamps_at=stamps_at)\n")
     assert _scan(aliased) == ["renamed", "through_module", "rebound"]         # a caller cannot hide behind another name
+    # ... nor behind a CHAIN of names (review of the last lists PR: one rebinding was followed, a second escaped)
+    chained = ("from list_service import create_list_record as create\nmake = create\nbuild = make\nstart: object = build\n"
+               "async def twice(db):\n    await db.fetch('x')\n    await make(db, user_id='u')\n"
+               "async def thrice(db):\n    await db.fetch('x')\n    await build(db, user_id='u')\n"
+               "async def annotated(db):\n    await db.fetch('x')\n    await start(db, user_id='u')\n"
+               "async def chained_good(db):\n    stamps_at = stamps_now()\n    await db.fetch('x')\n"
+               "    await build(db, user_id='u', stamps_at=stamps_at)\n")
+    assert _scan(chained) == ["twice", "thrice", "annotated"]
     gates = [n for n in ast.walk(ast.parse((ROOT / "list_service.py").read_text("utf-8"))) if isinstance(n, ast.Call)
              and getattr(n.func, "id", "") == "_gate" and any(k.arg in ("owner", "visibility") for k in n.keywords)]
     assert len(gates) == 1 and gates[0].args[1].value == "list.create"

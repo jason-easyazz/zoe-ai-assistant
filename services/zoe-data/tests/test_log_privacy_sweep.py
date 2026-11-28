@@ -436,7 +436,7 @@ def test_kind_refusal_tag_is_a_safe_reducer():
 #: os_shadow.py: an ALLOWLIST, not a denylist. Every argument of every logger call there is one of these names, each mapped onto a
 #: closed set (or a number) by ``os_shadow._finish`` before the line is written, or ``type(exc).__name__`` (a program identifier).
 OS_SHADOW_LOG_FIELDS = {"verb", "source", "cls", "live", "kernel_state", "result", "reason", "hop_ms", "q_ms",
-                        "decision", "ask_ms",   # the lists door (``_door_log`` clamps each to its closed set first)
+                        "decision", "ask_ms", "area",   # the door (``_door_log`` clamps each to its closed set first)
                         "code"}     # the forget path: ``type(exc).__name__`` or ``"queue_full"`` (pinned below)
 
 

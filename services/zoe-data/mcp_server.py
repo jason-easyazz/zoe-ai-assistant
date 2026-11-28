@@ -9,6 +9,7 @@ import random
 import sys
 import uuid
 import httpx
+import kernel_door
 from datetime import date, datetime, timedelta
 import os
 
@@ -1428,6 +1429,7 @@ async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
+    stamps_at = kernel_door.stamps_now()      # for a Zoe OS door that is TOLD who a thing is for (the reminder tools): before any await
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
 
@@ -1606,7 +1608,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         )
         # Canonical write path (same as routers/reminders.py and intent_router):
         # policy gate + INSERT + notification row + commit + broadcaster.broadcast.
-        reminder = await create_reminder_record(payload, user=actor, db=db)
+        try:
+            reminder = await create_reminder_record(payload, user=actor, db=db, stamps_at=stamps_at)
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no: an error result the brain relays; nothing was made
+            return {"error": exc.line() + " Nothing was made.", "status": "refused"}
         result = {"id": reminder.get("id"), "title": reminder.get("title", args["title"]),
                   "due_date": reminder.get("due_date"), "due_time": reminder.get("due_time"),
                   "priority": reminder.get("priority", payload.priority)}
@@ -2370,8 +2375,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": f"Reminder {rid} not found"}
         from reminder_service import tool_update_reminder_record      # the one writer of the reminders table
 
-        if not await tool_update_reminder_record(db, user_id=user_id, reminder_id=rid, fields=args):
-            return {"error": "No fields to update"}
+        try:
+            if not await tool_update_reminder_record(db, user_id=user_id, reminder_id=rid, fields=args, stamps_at=stamps_at):
+                return {"error": "No fields to update"}
+        except kernel_door.Refused as exc:      # the Zoe OS kernel said no (ZOE_OS_REMINDERS=kernel): nothing was changed
+            return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
         await _notify_ui("reminders", "reminder_updated", {"id": rid})
         return {"id": rid, "status": "updated"}
 
@@ -2382,7 +2390,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": f"Reminder {rid} not found"}
         from reminder_service import tool_delete_reminder_record
 
-        await tool_delete_reminder_record(db, user_id=user_id, reminder_id=rid)
+        try:
+            await tool_delete_reminder_record(db, user_id=user_id, reminder_id=rid, stamps_at=stamps_at)
+        except kernel_door.Refused as exc:
+            return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
         await _notify_ui("reminders", "reminder_deleted", {"id": rid})
         # Cancel any unfired proactive_scheduled job linked to this reminder.
         # On THIS tool's own connection (``on_connection``): borrowing more while it is held is how a full pool deadlocks.
@@ -2415,6 +2426,8 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"error": "minutes must be between 1 and 10080", "status": "refused"}
         try:
             reminder = await snooze_reminder_record(db, actor, rid, minutes)
+        except kernel_door.Refused as exc:
+            return {"error": exc.line() + " Nothing was changed.", "status": "refused"}
         except HTTPException as exc:
             if exc.status_code == 404:
                 return {"error": f"Reminder {rid} not found"}

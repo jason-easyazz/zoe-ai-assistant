@@ -23,8 +23,10 @@ The verbs it serves: ``list.add``, ``list.remove`` (registered HERE, over the sa
 ``remind.set`` and ``alarm.set`` (the lab drivers, ``zoe_os/brain/drivers.py``). Which of them zoe-data proposes is its own
 ``ZOE_OS_SHADOW_VERBS``; the kernel serves all four.
 
-It ALSO serves the lists door (``list_ask`` / ``list_report``, ``zoe_os/lists.py``): there the kernel DECIDES a list change by the
-roster's roles and records ids only; the list stays in production's store. Same socket, same credentials (the ``brain`` one).
+It ALSO serves the door (``zoe_os/door.py``): there the kernel DECIDES a change by the roster's roles and records ids only; the
+thing changed stays in production's store. Two areas: lists (``list_ask`` / ``list_report``, ``zoe_os/lists.py``) and reminders
+(``door_ask`` / ``door_report`` with ``area="reminders"``, ``zoe_os/remind_door.py``). Same socket, same credentials (the
+``brain`` one).
 
 What it grants itself, and why that is honest only in shadow: every roster member gets a RECORD-ONLY grant of the ``brain``
 skill's four acts at start (``GrantStore.grant(record_only=True)``, refused anywhere but a store marked ``shadow``), with no consent
@@ -56,6 +58,7 @@ from zoe_os.brain.drivers import ASKED, BRAIN, Alarms, Keeper, Lists, Reminders 
 from zoe_os.capability import Person, person_from_entry  # noqa: E402
 from zoe_os.kernel import Kernel  # noqa: E402
 from zoe_os.lists import VERBS as LIST_DOOR_VERBS  # noqa: E402
+from zoe_os.remind_door import VERBS as REMINDER_DOOR_VERBS  # noqa: E402
 from zoe_os.server import KernelServer  # noqa: E402
 from zoe_os import shadow_state  # noqa: E402
 
@@ -66,8 +69,9 @@ ADAPTERS = ({"skill": "voice", "emits": ["utterance"], "origin": True},
 PUMP_S = 0.5
 #: the brain manifest's ceiling plus the shadow-only ``list.remove``
 ACTS = (*BRAIN["acts"], "list.remove")       # the acts every roster member is given record-only, and the brain may propose
-#: the manifest also names the lists door's verbs (``zoe_os/lists.py``): a ceiling for ``list_ask``, decided by role, granted to nobody
-SHADOW_BRAIN = {**BRAIN, "acts": [*ACTS, *LIST_DOOR_VERBS]}
+#: the manifest also names the door's verbs, every area's (``zoe_os/lists.py``, ``zoe_os/remind_door.py``): a ceiling for
+#: ``list_ask`` / ``door_ask``, decided by role, granted to nobody
+SHADOW_BRAIN = {**BRAIN, "acts": [*ACTS, *LIST_DOOR_VERBS, *REMINDER_DOOR_VERBS]}
 
 
 def register_list_remove(kernel, lists: Lists) -> None:
@@ -186,7 +190,7 @@ class ShadowServer(KernelServer):
         self.record_again(a.get("on_behalf_of"))
         return super()._op_act(conn, a)
 
-    # The roster is re-read ONLY where the kernel DECIDES (the lists door). The watch-only ops (publish, act) keep the roster
+    # The roster is re-read ONLY where the kernel DECIDES (the door: ``list_ask`` / ``door_ask`` and their reports). The watch-only ops (publish, act) keep the roster
     # as loaded, exactly as before the door existed: with lists off nothing here costs a stat or follows a file edit.
     def _op_list_ask(self, conn, a: dict) -> dict:
         self.sync_roster()
@@ -195,6 +199,14 @@ class ShadowServer(KernelServer):
     def _op_list_report(self, conn, a: dict) -> dict:
         self.sync_roster()
         return super()._op_list_report(conn, a)
+
+    def _op_door_ask(self, conn, a: dict) -> dict:
+        self.sync_roster()
+        return super()._op_door_ask(conn, a)
+
+    def _op_door_report(self, conn, a: dict) -> dict:
+        self.sync_roster()
+        return super()._op_door_report(conn, a)
 
     def sync_roster(self) -> str:
         """The roster follows ``people.json`` with no restart. Called under the kernel lock (``KernelServer._answer``) before an
@@ -370,6 +382,10 @@ def build(state: Path):
         k.grants.grant(person, "brain", acts=list(ACTS), record_only=True)    # recorded whatever their role, never consent
     srv = ShadowServer(k, str(state / "k.sock"), state=state, roster=people, seen=seen)
     srv.roster_status = roster_status
+    # Only the CURRENT roster acts at the door (``door.Area.former``; lists keeps main's rule): a member taken off people.json
+    # stays in the kernel's people (forgettable) and changes nothing of anyone's. Per kernel: this server's roster, which
+    # ``apply_roster`` replaces on each re-read.
+    k.door.roster = lambda: srv.roster
     creds = {"voice": srv.issue("voice"), "brain": srv.issue("brain"), "panel": srv.issue("panel", surface=True)}
     return k, srv, creds
 
