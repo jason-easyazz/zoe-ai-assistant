@@ -172,11 +172,11 @@ async def test_music_through_home_assistant_is_home_control(monkeypatch):
             return types.SimpleNamespace(status_code=200)
 
     client = _Client()
-    assert await intent_router._post_music_ha_control(client, "http://bridge", {"action": "media_pause"}) == REFUSAL
+    assert await intent_router._post_music_ha_control(client, "http://bridge", {"entity_id": "media_player.kitchen", "action": "media_pause"}) == REFUSAL
     assert client.posted == []
     panel_principal.record_home_control(True)   # NEGATIVE CONTROL: the panel / a member reaches the player
-    assert await intent_router._post_music_ha_control(client, "http://bridge", {"action": "media_pause"}) is None
-    assert client.posted == [{"action": "media_pause"}]
+    assert await intent_router._post_music_ha_control(client, "http://bridge", {"entity_id": "media_player.kitchen", "action": "media_pause"}) is None
+    assert client.posted == [{"entity_id": "media_player.kitchen", "action": "media_pause"}]
 
 
 async def test_the_legacy_agent_ha_control_tool(bridge):
