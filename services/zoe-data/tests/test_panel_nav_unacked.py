@@ -73,6 +73,7 @@ class _Db:
             self.events.append(f"stamped:{row_id}")
             return _Cursor(rowcount=1)
         if "UPDATE ui_actions" in sql:
+            self.delivery_sql = sql
             self.events.append(f"delivered:{params}")
             return _Cursor()
         raise AssertionError(f"unexpected SQL: {sql}")
@@ -225,6 +226,20 @@ async def test_the_voice_broadcast_checks_after_sending_and_sends_what_it_always
     assert db.events.index(delivered[0]) < db.events.index("ack_check")
     assert db.selects[0][1] == ("panel-x", "row-panel_navigate")
     assert len(_lines(caplog)) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_delivery_note_never_overwrites_an_ack_that_already_landed(monkeypatch, caplog):
+    """A fast page can acknowledge while the broadcast is still going out: the delivery note is written only to a row
+    that has no ack yet.
+
+    Control run 2026-11-29: with the condition removed (`WHERE id = ?`) this fails.
+    """
+    db = _Db(_prev())
+    with caplog.at_level(logging.DEBUG, logger=voice_tts.logger.name):
+        await _run_broadcast(monkeypatch, db, delivered=1)
+    where = " ".join(db.delivery_sql.split()).split("WHERE", 1)[1]
+    assert where.strip() == "id = ? AND acked_at IS NULL"
 
 
 @pytest.mark.asyncio

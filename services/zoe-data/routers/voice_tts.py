@@ -1765,6 +1765,8 @@ async def _broadcast_skybridge_ui(
             # can unload the socket before a following show_card frame is handled;
             # the freshly loaded page will poll /api/ui/actions/pending and render it.
             if nav_delivered:
+                # Only while the page has not answered: a fast ack that lands while the broadcast is still going out
+                # has already written the row, and this delivery note must not overwrite it.
                 await _db.execute(
                     """UPDATE ui_actions
                        SET status = 'success',
@@ -1772,7 +1774,7 @@ async def _broadcast_skybridge_ui(
                            error_message = ?,
                            updated_at = NOW(),
                            acked_at = NOW()
-                       WHERE id = ?""",
+                       WHERE id = ? AND acked_at IS NULL""",
                     (_NAV_DELIVERED_NOTE, nav_message["action_id"]),
                 )
                 await _db.commit()
