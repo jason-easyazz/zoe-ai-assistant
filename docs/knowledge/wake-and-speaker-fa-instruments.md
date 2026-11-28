@@ -28,6 +28,7 @@ changes a threshold. Moving one is an owner voice-path step, replay-gated like a
 | `nearmiss` | the Pi log (ssh, read-only) | near-miss score bands since `--since`, wake outcomes (turn / empty chime / nothing), wakes 01:00-05:00, near-miss then a wake 1.5-10 s later (retry proxy) |
 | `run` | the pinned model files, 22:00-07:00 | replays `hey_zoe.onnx` frame by frame (1280-sample int16 chunks, as the daemon feeds it) over positives and negatives, applies the daemon confirmation state machine at every threshold 0.20-0.80, writes `~/.zoe/voice-gate/wake/{scores.json,report.md,report.json}` |
 | `report` | a saved `scores.json` | re-renders the curve and the recommendation without the model |
+| `gate` | the Pi log, the clips, optionally a saved `scores.json` | the wake-time energy gate (section 4): heard and empty-chime wakes blocked per floor, and the saved run's wakes re-counted with the gate; no model |
 
 **Sets.**
 
@@ -156,3 +157,74 @@ This reproduces the 0.9-1.4 % of the threshold derivation against the real enrol
 90 opens the voice session. The weak slice is clean synthetic speech (2.9 %). The FAR 0.1 % tier (0.309 / 0.351) would
 have let 1 of the 1,672 through. Re-derive the threshold from the labelled household sheet (30 or more rows) before
 moving it. The sheet is empty of post-flip turns today because the panel has not woken since the flip.
+
+## 4. Wake fire log, energy gate and silent drop (2026-11-28)
+
+**Why.** The panel was waking with nobody speaking: 26 of 88 wake-word turns with a saved clip since 2026-11-01 ended
+in the empty-transcript chime, and in 19 of those the 1.6 s the detector had just scored held nothing above the room
+floor (loudest 80 ms chunk 25-273 int16 RMS, peak 82-1067 of 32768). Near-miss log lines rose from about 55 a day to
+about 170 a day on 2026-11-20, at every hour, with no daemon change.
+
+**What drives them (measured offline with the panel's own model files).**
+
+- The panel daemon DOES run Speex noise suppression in front of the wake model: `speexdsp-ns` has been in the Pi venv
+  since 2026-07-20 and the library is mapped in the running process. Earlier notes that say it is absent are wrong.
+- Replayed from a cold start, the silent clips score about 0 (0 of 14 wake). Replayed after 6 s of the same room
+  floor, so that Speex has adapted as it has on the panel, 8 of 14 wake and 9 of 14 reach 0.5. Without Speex, same
+  lead: 1 of 14. So the false wakes need the suppressor's adapted state.
+- It is not the model answering silence: with the clip replaced by digital zeros or by white noise at the floor level,
+  0 of 14. There is a faint sound in each clip. Scaled to a quarter: 0 of 14. With white noise of 30 RMS added (the
+  level of the floor itself): 0 of 14 wake. High-passed at 100 Hz: still 4 of 14, so it is not mains hum.
+- They stand alone: none came within 9 minutes of the previous wake (median about 4.5 hours), at all hours, so they
+  are not an echo of a reply or a chime.
+
+Best reading: a faint sound at about the level of the room floor, which Speex lifts clear of the floor it has learned,
+looks enough like the phrase to the model. Which physical sound it is has not been identified.
+
+**What shipped (panel daemon, settings in `.env.voice`, unprefixed like `WAKE_CHIME_ON_WAKE`).**
+
+| setting | default | does |
+|---|---|---|
+| (none) | always on | every confirmed wake logs `WAKE_FIRE score= score_max= peak= rms= loud_rms= floor= quiet= gate=` |
+| `WAKE_ENERGY_GATE` | on | a wake whose `loud_rms` (loudest 80 ms chunk of the last 1.6 s, int16 RMS, mean removed) is under the floor goes no further: `gate=block`, no screen, no recording, no sound. Orb taps are never gated. A blocked wake does not start the 5 s minimum interval |
+| `WAKE_ENERGY_FLOOR` | 550 | the floor |
+| `WAKE_SILENT_DROP` | on | only matters with the gate off: a quiet-window wake runs its turn, but an empty transcript plays no retry chime and logs `false_wake:` (the clip is uploaded and kept as before) |
+| `WAKE_GATE_KEEP` / `WAKE_GATE_KEEP_DIR` | 50 / `~/.zoe-voice/false-wakes` | a blocked wake's 1.6 s window is kept on the panel only (never uploaded), newest 50, mode 600, so the floor can be re-checked; 0 keeps nothing |
+
+**The margin.** 49 wake turns since late October that were hand-classed as a real wake followed by a command (heard
+right or wrong): quietest `loud_rms` 2196, so the floor is 12 dB under the quietest real wake. 19 silent wakes: loudest
+273, 6 dB under the floor. `measure_wake.py gate` on 2026-11-28: of 62 heard wake turns the gate blocks 1 (a faint
+distant voice at 314 that was not addressed to the panel), of 26 empty-chime wakes it blocks 20; the other 6 are
+television or speech at 600-3600 and are out of an energy gate's reach.
+
+**What it does not do.** A false wake on real sound (television, a conversation) passes the gate. On the saved
+2026-10-19 replay at threshold 0.50 the gate changes nothing for public speech or the pendant (0.86 wakes per hour
+with and without it): those wakes are on speech-level audio. The follow-ups are a verifier trained on household
+positives and harvested false wakes (openWakeWord `custom_verifier_models`), and a trigger rule that needs the score
+to fall back before it can fire again.
+
+**The alternative that was measured.** openWakeWord's own `vad_threshold=0.5` (a second Silero session; the score is
+zeroed unless the VAD's score for one of the three chunks 0.24-0.56 s before the current one passed;
+`list(self.vad.prediction_buffer)[-7:-4]`, one entry per 1280-sample call, in openWakeWord 0.6.0 `model.py`) blocked 14 of 14 silent wakes in the Speex-adapted replay
+and kept 20 of 20 real November wakes in the cold replay. It was not chosen as the first step: it zeroes the score
+itself, so the near-miss lines that showed this problem would stop; its window is fixed relative to EACH frame while
+the daemon confirms over three hits inside one second, so every one of the three hits (up to 1 s apart, the last one
+0.1-0.2 s after the phrase ends) needs speech in its own 0.24-0.56 s look-back: true for the fire on a typical phrase,
+but timing-dependent where the energy gate is not; it adds a second Silero session per 80 ms on the Pi; and it has not been replayed with Speex adapted on the real
+wakes. `measure_wake.py run --vad-threshold 0.5` is the arm for that comparison.
+
+**Instrument.** `python3 scripts/perf/measure_wake.py gate [--floor F] [--threshold T]` needs no model and no lock.
+`gate --synthetic-only` needs nothing at all: it generates a near-silence class (digital silence up to the loudest
+silent wake logged, 273, with a faint hum and click) and a quiet-phrase class (694-5000) and exits 1 unless the floor
+blocks every near-silence window and no phrase. Otherwise it
+joins the panel wake-word turns since `--wakes-since` to their clips (the corpus root plus the quarantined noise
+wakes), measures the pre-roll and prints how many heard and empty-chime wakes each floor blocks. When a saved
+`scores.json` exists it also re-counts that run's confirmed wakes with the gate applied to the 1.6 s before each fire.
+To replay like the panel, install Speex beside the replay's openWakeWord
+(`python3 -m pip install --no-deps --target ~/.cache/zoe-wake-fa/pylib speexdsp-ns==0.1.2`); a cold replay still
+understates the panel, because the suppressor there has hours of room floor behind it.
+
+**After a deploy, read `voice.log`:** `grep WAKE_FIRE` shows one line per confirmed wake. A real wake reads
+`quiet=0 gate=pass` with `loud_rms` in the thousands. A `gate=block` line with `loud_rms` above about 400, or a person
+saying the phrase and getting no response, means the floor is too high: lower `WAKE_ENERGY_FLOOR`, or set
+`WAKE_ENERGY_GATE=0`, and restart `zoe-voice`.

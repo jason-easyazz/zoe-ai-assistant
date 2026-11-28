@@ -577,6 +577,27 @@ HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "7777"))
 MIN_WAKE_INTERVAL_S = float(os.environ.get("MIN_WAKE_INTERVAL_S", "3.0"))
 WAKE_CONFIRM_COUNT = int(os.environ.get("WAKE_CONFIRM_COUNT", "2"))
 WAKE_CONFIRM_WINDOW_S = float(os.environ.get("WAKE_CONFIRM_WINDOW_S", "0.8"))
+# ── Wake fire log + wake-time energy gate + silent drop (2026-11-28) ──────
+# The wake model sometimes confirms on a room where nothing was said (measured on the panel's saved
+# wake recordings: the 1.6 s it had just scored held nothing above the room's noise floor). Each such
+# wake lit the screen, recorded 4.6 s of silence and played the retry chime. Three parts:
+#   1. WAKE_FIRE (always on, log-only): the score at the fire, the highest score of the confirming
+#      chunks, and the level of the audio the detector just scored (peak, RMS, loudest 80 ms chunk).
+#   2. WAKE_ENERGY_GATE: the wake goes ahead only when the LOUDEST 80 ms chunk of that audio is at
+#      or above WAKE_ENERGY_FLOOR (int16 RMS, mean removed). A blocked wake logs its WAKE_FIRE
+#      line with gate=block and does nothing else: no screen, no recording, no sound. Orb taps are
+#      never gated. Numbers behind the floor: docs/knowledge/wake-and-speaker-fa-instruments.md.
+#   3. WAKE_SILENT_DROP: with the gate off, a wake whose scored audio was that quiet still runs
+#      the turn, but an empty transcript then plays NO retry chime (logged as false_wake).
+# Unprefixed names, like WAKE_CHIME_ON_WAKE: they are panel-only settings read from .env.voice.
+WAKE_ENERGY_GATE = os.environ.get("WAKE_ENERGY_GATE", "true").strip().lower() in ("1", "true", "yes", "on")
+WAKE_ENERGY_FLOOR = max(0.0, _float_env("WAKE_ENERGY_FLOOR", 550.0))
+WAKE_SILENT_DROP = os.environ.get("WAKE_SILENT_DROP", "true").strip().lower() in ("1", "true", "yes", "on")
+_WAKE_GATE_CHUNKS = 20   # 1.6 s at 1280/16 k: the wake model's whole input window, whatever PREROLL_CHUNKS says
+# A blocked wake keeps the 1.6 s it fired on, on the panel only (never uploaded), so the floor can be re-checked
+# later: the newest WAKE_GATE_KEEP files in WAKE_GATE_KEEP_DIR, mode 600. 0 keeps nothing.
+WAKE_GATE_KEEP = max(0, _int_env("WAKE_GATE_KEEP", 50))
+WAKE_GATE_KEEP_DIR = os.path.expanduser(os.environ.get("WAKE_GATE_KEEP_DIR", "~/.zoe-voice/false-wakes"))
 # Local wake beep (plays immediately on wake, independent of backend).
 WAKE_BEEP_ENABLED = os.environ.get("WAKE_BEEP_ENABLED", "true").lower() in ("1", "true", "yes")
 WAKE_BEEP_FREQ_HZ = int(os.environ.get("WAKE_BEEP_FREQ_HZ", "1046"))  # C6
@@ -1080,6 +1101,71 @@ _AMBIENT_QUEUE: "queue.Queue[bytes]" = None  # type: ignore  # set in main()
 # and real captures began on "Zoe", losing the command onset behind it.
 _PREROLL: deque = deque(maxlen=int(os.environ.get("PREROLL_CHUNKS", "20")))
 import queue as _queue_module
+
+
+def _wake_window_levels(chunks) -> "tuple[int, float, float]":
+    """(peak, rms, loudest-chunk rms) of raw int16 mic chunks, each chunk's own mean removed (the
+    speakerphone carries a small DC offset). No audio at all is (0, 0.0, 0.0)."""
+    peak, total, count, loud = 0, 0.0, 0, 0.0
+    for chunk in list(chunks)[-_WAKE_GATE_CHUNKS:]:
+        pcm = np.frombuffer(chunk, dtype=np.int16).astype(np.float64)
+        if not pcm.size:
+            continue
+        pcm -= pcm.mean()
+        energy = float(np.dot(pcm, pcm))
+        peak = max(peak, int(np.abs(pcm).max()))
+        loud = max(loud, math.sqrt(energy / pcm.size))
+        total += energy
+        count += pcm.size
+    return peak, (math.sqrt(total / count) if count else 0.0), loud
+
+
+# Was the audio behind the LAST wake-word fire under the energy floor? Written by _wake_fire_allowed
+# (main loop), read by voice_command for the silent drop. An orb tap never sets it.
+_wake_window_quiet = False
+
+
+def _wake_fire_allowed(chunks, score: float, score_max: float) -> bool:
+    """Log WAKE_FIRE for a confirmed wake and say whether it may go ahead (False = the energy gate
+    blocked it). A failure to measure never blocks a wake."""
+    global _wake_window_quiet
+    try:
+        peak, rms, loud = _wake_window_levels(chunks)
+    except Exception as exc:
+        _wake_window_quiet = False
+        log.warning("WAKE_FIRE score=%.4f score_max=%.4f levels unreadable (%s) gate=pass", score, score_max, exc)
+        return True
+    quiet = loud < WAKE_ENERGY_FLOOR
+    blocked = quiet and WAKE_ENERGY_GATE
+    _wake_window_quiet = quiet
+    log.info("WAKE_FIRE score=%.4f score_max=%.4f peak=%d rms=%.1f loud_rms=%.1f floor=%.0f quiet=%d gate=%s",
+             score, score_max, peak, rms, loud, WAKE_ENERGY_FLOOR, int(quiet),
+             "block" if blocked else ("pass" if WAKE_ENERGY_GATE else "off"))
+    return not blocked
+
+
+def _keep_blocked_wake(chunks) -> "str | None":
+    """Save the window a blocked wake fired on (the newest WAKE_GATE_KEEP, panel-local, mode 600) -> path or None.
+    Never raises: keeping evidence must not break the wake loop."""
+    if WAKE_GATE_KEEP <= 0:
+        return None
+    try:
+        os.makedirs(WAKE_GATE_KEEP_DIR, mode=0o700, exist_ok=True)
+        name = "blocked_%s_%09d.wav" % (time.strftime("%Y%m%d-%H%M%S"), time.time_ns() % 1_000_000_000)
+        path = os.path.join(WAKE_GATE_KEEP_DIR, name)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "wb") as fh, wave.open(fh, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(b"".join(list(chunks)[-_WAKE_GATE_CHUNKS:]))
+        kept = sorted(n for n in os.listdir(WAKE_GATE_KEEP_DIR) if n.startswith("blocked_") and n.endswith(".wav"))
+        for old in kept[:-WAKE_GATE_KEEP]:
+            os.unlink(os.path.join(WAKE_GATE_KEEP_DIR, old))
+        return path
+    except Exception as exc:
+        log.warning("blocked wake not kept (%s)", exc)
+        return None
 
 
 # ── Silero VAD loader (lazy) ─────────────────────────────────────────────────
@@ -5140,6 +5226,9 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
     global _ignore_wake_until
     _recording_active.set()
     follow_ups_done = 0
+    # Silent drop: a wake-WORD turn (never an orb tap) whose scored audio was under the energy floor
+    # plays no retry chime if nothing was heard. Only reachable with the energy gate off.
+    quiet_wake = bool(WAKE_SILENT_DROP and wake_stream is not None and _wake_window_quiet)
     # B1.1: only the streaming turn has the server-side gate; the endpointer
     # itself never fires unless ZOE_SPECULATIVE_TURN is on and VAD mode is up.
     _spec = _SpeculativeTurn(pa) if _speculation_available() else None
@@ -5172,16 +5261,19 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                 if _spec.cancelled:
                     # Speculation dropped: run the FULL recording as a normal
                     # turn, handing over the claim the speculative pass scored.
-                    played_audio = _turn_fn(pa, wav, voice_claim=_spec.voice_claim)
+                    played_audio = _turn_fn(pa, wav, voice_claim=_spec.voice_claim, prompt_on_empty=not quiet_wake)
             finally:
                 _monitor.stop()
             seed_wav = _monitor.take_seed()
         else:
             # Under a barge monitor, with the long-speech / trailing-conjunction
             # guards (_turn_with_monitor): one spoken thought is one turn.
-            played_audio, seed_wav = _turn_with_monitor(pa, wav, _turn_fn, wake_turn=True)
+            played_audio, seed_wav = _turn_with_monitor(pa, wav, _turn_fn, wake_turn=True,
+                                                        prompt_on_empty=not quiet_wake)
             if _last_turn_flags.get("wake_only"):
                 played_audio, seed_wav = _listen_after_wake_only(pa, _turn_fn)
+        if quiet_wake and not played_audio:
+            log.info("false_wake: quiet wake window and nothing played - no retry chime.")
 
         # ── Conversation mode ("hey zoe, let's talk") ──
         # The server's opener fast-path marks the done frame with
@@ -6168,6 +6260,7 @@ def main():
     last_near = 0.0
     wake_hits = 0
     wake_first_hit_at = 0.0
+    wake_score_max = 0.0   # highest score among the chunks of the confirmation in progress
     try:
         while not _shutdown.is_set():
             # ── Enrollment mode: a queued server command ("learn my voice") runs HERE, with the wake stream closed ──
@@ -6262,11 +6355,14 @@ def main():
                 if wake_hits == 0:
                     wake_hits = 1
                     wake_first_hit_at = now
+                    wake_score_max = mx
                 elif (now - wake_first_hit_at) <= WAKE_CONFIRM_WINDOW_S:
                     wake_hits += 1
+                    wake_score_max = max(wake_score_max, mx)
                 else:
                     wake_hits = 1
                     wake_first_hit_at = now
+                    wake_score_max = mx
             else:
                 # Expire stale partial confirmations.
                 if wake_hits and (now - wake_first_hit_at) > WAKE_CONFIRM_WINDOW_S:
@@ -6276,6 +6372,12 @@ def main():
                 wake_hits = 0
                 # Guard against back-to-back re-triggers from echo bursts/noise.
                 if (now - _last_wake_at) < MIN_WAKE_INTERVAL_S:
+                    continue
+                # Energy gate: a wake the model confirmed on a silent room stops here (one WAKE_FIRE
+                # line, nothing else). It does not start the minimum interval, so a real wake a
+                # moment later is not refused for following a blocked one.
+                if not _wake_fire_allowed(_PREROLL, mx, wake_score_max):
+                    _keep_blocked_wake(_PREROLL)
                     continue
                 _last_wake_at = now
                 # Keep the wake stream OPEN and record the command straight from it.
