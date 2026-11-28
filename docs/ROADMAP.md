@@ -1,7 +1,7 @@
 ---
 type: roadmap
 audience: Jason + every agent
-updated: 2026-11-14
+updated: 2026-11-28
 ---
 # Zoe roadmap
 
@@ -148,6 +148,62 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
    holds household words (router shadow log, training copy, retired agent session stores); delete the retired training timer and its
    duplicate corpus. Acceptance: an inventory test of where household text lives.
 ## Later (link list)
+
+**After the kernel migration (from the nod study, 2026-11-28).** Next is full (nine items; three more would pass ten), so this
+order waits here and moves into Next as slots free. All ten start after the Zoe OS migration in Now; none is started. Record for
+every item: [nod deep dive](research/nod-deep-dive-2026-11-28.md) (final build order).
+
+1. **One approval-and-outcome record in the kernel,** with the approval card in voice and panel form and a closed-choice reading
+   of the reply (yes / no / other, fresh / stale). An action is asked, approved, running, done or uncertain, and never runs twice;
+   a stale or changed yes is refused. Number: pending spoken confirmations are held in memory for 30 s, one per panel, lost on a
+   restart, with no record that they ran. Gate: the kernel migration; the voice replay; before home control and messages are
+   switched on, ideally. Everything below stands on it. From the exhaustive read (part 4): the record also carries who STARTED the
+   work (work nobody asked for never asks and never acts), a withdrawn flag (a stopped request's pending yes dies with it), a yes
+   bound to one saved question, "did not run" versus "may have run", and for home devices an "uncertain until its state is read"
+   fence, which must exist before home control is switched on.
+2. **A scenario harness with a simulated household,** the first ten scenarios and a planted-content memory test, so a behaviour
+   finding becomes a scenario instead of another review round. Number: the kernel stack took 5 review rounds; real struggling
+   turns to draw from: wake turns misheard then repeated (8 of 17 wake commands since 2026-11-10; cause under investigation). Gate: owner approval before a
+   real turn becomes a scenario (invented stand-ins only); offline, no model judge on the live path.
+3. **Tool-result coaching for the voice brain:** "outcome unknown" on write timeouts, results that name the next step, the
+   evidence rule (no "done" without a successful result), a repeat-failure breaker. Number: a timed-out write is reported as
+   "couldn't reach", so a retry can add an item twice; duplicate writes after a timeout are not measured yet. Gate: the voice replay.
+4. **Background helper jobs off the voice brain's slot,** under one helper contract (deadline, token cap, no retry, safe-side
+   fallback). Number: brain cache misses on household panel turns 48 in 27 days (Now section); most cold wakes of about 5 s on
+   2026-11-02 were helper jobs evicting the warm prefix. Gate: the voice replay; the brain-slot record
+   ([brain slot isolation](research/brain-slot-isolation-2026-10-29.md)).
+5. **"What Zoe did" and an admin permissions model.** Every action with the words that allowed it, Undo where safe; an admin sets
+   everything per profile, guest and device from panel settings, the phone or a verified admin voice (owner, 2026-11-28); a risky
+   spoken grant is repeated back and needs a plain yes from the same verified voice. Number: none yet. Gate: item 1. Design drafted
+   2026-11-28, not yet in the repo.
+6. **Vault broker additions:** a use-once claim per secret use, "save this login?" on the phone after a phone sign-in, a payment
+   approval tied to payee, amount and page. Gate: Next 4 (de-privilege, then the broker). Record also: [credential vault](architecture/credential-vault.md).
+7. **An errand lane on the heavy model:** a text-reading persistent browser, a stop before every committing step, errand cards,
+   nod's guides, bounded sub-runs; adults only; done means a reference number on the page. Gate: items 1 and 6; owner decisions
+   for each errand class.
+8. **Skill manifests where undeclared means change,** plain connection states, then n8n on the box behind one kernel door that
+   runs only admin-published workflows. Number: n8n memory cost unmeasured (a few hundred MB expected). Gate: item 1; a RAM measurement.
+9. **First run per member, a live activity line, spoken-style counts** (word cap per reply kind, at most one question, no "done"
+   without a kernel record). Gate: item 2 (the counts run in the harness).
+10. **Signed updates, a codes-only fault report, named failure codes.** Needed before a box is sold, not before. Gate: Next 9.
+    One cheap part moves earlier: integrity checks (hash, resume, free space) on the model downloads. A hold on automatic kernel
+    and platform updates is already in place on the development box and stays a first-boot requirement.
+
+**Also after the kernel migration (from the similar-projects survey, 2026-11-28).** Six items the nod list does not cover; none is
+started. Record: [similar projects](research/similar-projects-2026-11-28.md) (ranked fifteen; the other nine sit under the nod items above).
+
+1. **A false wake makes no sound.** An empty wake turn with no speech in it is logged and dropped without the retry chime. Number:
+   near-miss wake scores on the panel rose about threefold from 2026-11-20 with no deploy. Gate: the voice replay; a panel daemon deploy.
+2. **Conflicting memories are ordered by when they were said, not when they arrived.** Number: none yet (a bench cell first). Gate:
+   the memory bench; "memory must be flawless".
+3. **The wake turn's end-of-speech detector is warmed on the wake audio,** with gain applied to the detector's input only. Gate: the
+   offline turn-ending evaluation, then the voice replay.
+4. **Per-turn keyterm biasing in the speech model** (room devices, the speaker's lists, household names), curated at night; the
+   speech model itself does not change. Gate: the speech-accuracy A/B with zero regressions on chat turns.
+5. **A wake gate and an on-box verifier trained on the panel's own false wakes.** Number: false accepts per hour on a fixed household
+   negative set (not measured yet). Gate: the wake replay tool.
+6. **What never to remember:** no negative claims about tools, no one-off turned into a standing preference, promotion only after
+   recall by two or more distinct queries, no lossy rewrite. Gate: the memory bench.
 
 **Platform and structure** (deep dive B): A1 (moved from Next 2026-11-14 to keep Next at 10; its open work continues as #2492, #2493 and #2497): Partly landed #2117 (router off the loop; `zoe_event_loop_lag_seconds` on `/metrics`). Not done: 1 s or longer stalls 4 to 16 times a day (2026-11-07 to 11-12) from blockers not yet attributed. Acceptance: the lag marker names what was running, and the 1 s stalls stop. B4 resume the `voice_tts.py` split (leaves first), then a size ratchet test, and plan the `intent_router.py` split (replay on every step; moved from Next 2026-11-14 to keep Next at 10), [B2 harness out of zoe-data](research/architecture-deep-dive-2026-10-18/lane-C-brain-ops-roadmap.md), B5 tool schemas from one registry, B6 flag registry,
 B7 observability and `turn_id`, B9 ops hygiene (track every live unit, container caps, `.env` reaping), [tech-debt plan](architecture/tech-debt-remediation-plan.md) Wave 4
