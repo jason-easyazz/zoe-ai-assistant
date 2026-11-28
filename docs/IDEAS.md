@@ -26,6 +26,10 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - **Core:** [youtube.com/watch?v=n5cYS6KuyK8](https://www.youtube.com/watch?v=n5cYS6KuyK8) — laid out the idea of a **harness that helps Zoe self-evolve** (edit her own code, write-gated through the PR harness).
 - Plan: memory `project-zoe-self-evolution-toolchain`.
 
+### nod (n8n's open-source agent) — one durable record for everything that changes the world — 🔬 exploring
+- **Core:** [github.com/n8n-io/nod](https://github.com/n8n-io/nod) (Apache-2.0, TypeScript, research preview) — a text-first, one-owner agent; not adopted, no code taken. The one tying idea: a single durable approval-and-outcome record (asked, approved, running, done, or uncertain and never run twice) that approvals, vault uses, payments, errands and "what did Zoe do" all sit on; Zoe's kernel should own it.
+- **Record:** [`research/nod-deep-dive-2026-11-28.md`](research/nod-deep-dive-2026-11-28.md); the order is in [ROADMAP.md](ROADMAP.md) under Later, "After the kernel migration (from the nod study, 2026-11-28)".
+
 ### (Jason: annotate) — 💡 pinned
 - **Core:** [youtube.com/watch?v=vy7o1g2iHY8](https://www.youtube.com/watch?v=vy7o1g2iHY8) — *Jason to add the one line: what this sparked.*
 
