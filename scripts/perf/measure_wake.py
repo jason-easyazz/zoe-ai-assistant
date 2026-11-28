@@ -349,7 +349,7 @@ class OwwScorer:
     flushes that noise out of the 1.28 s feature window and ``tail_s`` lets the score ramp finish."""
 
     def __init__(self, model_path: Path, features_dir: Path, *, model_factory: Optional[Callable] = None,
-                 speex_ns: bool = False):
+                 speex_ns: bool = False, vad_threshold: float = 0.0):
         if model_factory is None:
             from openwakeword.model import Model as model_factory  # noqa: N813
         kw = dict(wakeword_models=[str(model_path)], inference_framework="onnx",
@@ -357,6 +357,8 @@ class OwwScorer:
                   embedding_model_path=str(Path(features_dir) / "embedding_model.onnx"))
         if speex_ns:      # the daemon's kwarg, passed only when on (it is absent, not False, when speexdsp_ns is missing)
             kw["enable_speex_noise_suppression"] = True
+        if vad_threshold > 0:   # openWakeWord's own gate: zero unless Silero VAD passed 0.32-0.56 s before the frame
+            kw["vad_threshold"] = float(vad_threshold)
         self.model = model_factory(**kw)
 
     def frames(self, x, *, lead_s: float = 2.0, tail_s: float = 1.0, seed: int = 0) -> list:
@@ -829,7 +831,8 @@ def cmd_run(args) -> int:
     speex_ns, speex_warn = resolve_speex(getattr(args, "speex_ns", None))
     if speex_warn:
         print(f"measure_wake: {speex_warn}", file=sys.stderr)
-    scorer = OwwScorer(model, feats, speex_ns=speex_ns)
+    vad_threshold = float(getattr(args, "vad_threshold", 0.0) or 0.0)
+    scorer = OwwScorer(model, feats, speex_ns=speex_ns, vad_threshold=vad_threshold)
     t0 = time.time()
     clips, aborted = score_clips(todo, scorer, notes, lead_s=args.lead_s, tail_s=args.tail_s,
                                  min_avail_mb=args.min_avail_mb)
@@ -840,7 +843,7 @@ def cmd_run(args) -> int:
                 embedding_sha256=sha256(feats / "embedding_model.onnx"), onnxruntime=onnxruntime.__version__,
                 lead_s=args.lead_s, tail_s=args.tail_s, seconds=round(time.time() - t0, 1),
                 finished=dt.datetime.now().isoformat(timespec="seconds"), notes=notes,
-                settings=dict(live=live, frr_budget=frr_budget, speex_ns=speex_ns))
+                settings=dict(live=live, frr_budget=frr_budget, speex_ns=speex_ns, vad_threshold=vad_threshold))
     _write_private(out / "scores.json", json.dumps(dict(meta=meta, clips=clips)))
     near = nearmiss_summary(pvl.events(lines), since=args.since)
     rows, rec, md = build_report(clips, live=live, frr_budget=frr_budget, near=near, aborted=aborted,
@@ -858,6 +861,210 @@ def cmd_run(args) -> int:
         return EXIT_INCOMPLETE
     return 0
 
+
+
+# ------------------------------------------------------------------- the wake-time energy gate (no model)
+
+GATE_FLOOR = 550.0          # the daemon's WAKE_ENERGY_FLOOR default: int16 RMS of the loudest 80 ms chunk
+GATE_CHUNKS = 20            # the daemon's _WAKE_GATE_CHUNKS: the 1.6 s the detector scored before the fire
+GATE_FLOORS = (200.0, 300.0, 400.0, 550.0, 800.0, 1000.0, 1500.0, 2000.0)
+QUARANTINED_WAKES = CORPUS / "quarantine-20261118-noise-wakes"   # wake clips the curator moved out of the corpus root
+
+
+def chunk_rms(x) -> list:
+    """RMS of every whole 1280-sample chunk, the chunk's own mean removed (``_wake_window_levels`` in the daemon)."""
+    import numpy as np
+    x = np.asarray(x, dtype=np.float64)
+    out = []
+    for i in range(0, len(x) - CHUNK + 1, CHUNK):
+        c = x[i:i + CHUNK]
+        out.append(float(np.sqrt(np.mean(np.square(c - c.mean())))))
+    return out
+
+
+def window_loudest(rms: Sequence[float], end: int, n: int = GATE_CHUNKS) -> float:
+    """The gate's measure for a wake that fires on chunk ``end``: the loudest of the ``n`` chunks ending there. Chunks
+    before the start of the audio (the replay's zero lead) count as silence."""
+    lo = max(0, end - n + 1)
+    return max(rms[lo:end + 1], default=0.0) if end >= 0 else 0.0
+
+
+# The synthetic classes the gate must separate (no recordings: generated here, seeded). Levels are the loudest-chunk
+# int16 RMS. near_silence spans digital silence up to the loudest silent false wake logged on the panel (273, measured
+# 2026-11-28 over 19 of them); quiet_phrase spans the quietest real wake measured (2196) down 10 dB (694).
+NEAR_SILENCE_LEVELS = (0.0, 25.0, 60.0, 110.0, 200.0, 273.0)
+QUIET_PHRASE_LEVELS = (694.0, 1100.0, 2196.0, 5000.0)
+ROOM_FLOOR_RMS = 27.0      # median 10 ms floor of the panel's wake pre-rolls (int16)
+
+
+def _scaled_to_loudest(x, target: float):
+    import numpy as np
+    loud = max(chunk_rms(x), default=0.0)
+    return x * (target / loud) if loud > 0 else x * 0.0
+
+
+def synthetic_window(cls: str, level: float, *, seed: int = 0):
+    """1.6 s of int16-range float audio for the gate's synthetic classes. ``near_silence``: a room floor with a faint
+    hum + click (what the silent false wakes look like) whose loudest chunk is ``level``. ``quiet_phrase``: a two-syllable
+    voiced burst on the room floor whose loudest chunk is ``level``."""
+    import numpy as np
+    n = GATE_CHUNKS * CHUNK
+    rng = np.random.default_rng(seed)
+    t = np.arange(n) / SR
+    if cls == "near_silence":
+        if level <= 0:
+            return np.zeros(n)
+        floor = rng.normal(0.0, min(level, ROOM_FLOOR_RMS), n)
+        faint = 0.3 * np.sin(2 * np.pi * 120 * t) + np.where((t > 0.9) & (t < 0.905), 1.0, 0.0)
+        return _scaled_to_loudest(floor + faint * level, level)
+    if cls == "quiet_phrase":
+        env = np.zeros(n)
+        for start, dur in ((0.55, 0.25), (0.90, 0.35)):
+            i, m = int(start * SR), int(dur * SR)
+            env[i:i + m] = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(m) / m)
+        voice = env * sum(np.sin(2 * np.pi * f * t) / k for k, f in enumerate((140, 280, 420, 700, 1200, 2400), 1))
+        return _scaled_to_loudest(voice, level) + rng.normal(0.0, ROOM_FLOOR_RMS, n)
+    raise ValueError(cls)
+
+
+def synthetic_gate_rows(floor: float, *, seeds: Sequence[int] = (0, 1, 2)) -> list:
+    """[{cls, level, n, blocked, loud_min, loud_max}]: the gate on the synthetic classes. The bar: every near_silence
+    row fully blocked, no quiet_phrase row blocked at all."""
+    rows = []
+    for cls, levels in (("near_silence", NEAR_SILENCE_LEVELS), ("quiet_phrase", QUIET_PHRASE_LEVELS)):
+        for level in levels:
+            louds = [window_loudest(chunk_rms(synthetic_window(cls, level, seed=s)), GATE_CHUNKS - 1) for s in seeds]
+            rows.append(dict(cls=cls, level=level, n=len(louds), blocked=sum(1 for v in louds if v < floor),
+                             loud_min=round(min(louds), 1), loud_max=round(max(louds), 1)))
+    return rows
+
+
+def synthetic_verdict(rows: Sequence[dict]) -> bool:
+    return all(r["blocked"] == r["n"] for r in rows if r["cls"] == "near_silence") and \
+        all(r["blocked"] == 0 for r in rows if r["cls"] == "quiet_phrase")
+
+
+def render_synthetic(rows: Sequence[dict], floor: float) -> str:
+    out = [f"### Synthetic classes at floor {floor:.0f} (generated, no recordings)", "",
+           "| class | level | blocked |", "|---|---|---|"]
+    out += [f"| {r['cls']} | {r['level']:.0f} | {r['blocked']}/{r['n']} |" for r in rows]
+    out += ["", "Verdict: " + ("PASS (all near-silence blocked, no quiet phrase blocked)" if synthetic_verdict(rows)
+                                else "FAIL (the floor does not separate near-silence from a quiet phrase)")]
+    return "\n".join(out)
+
+
+def live_wake_levels(lines: Sequence[str], corpus_dirs: Sequence[str], *, since: dt.datetime, loader=None) -> list:
+    """[{ts, outcome, loud}] for every panel WAKE-WORD turn (orb taps excluded) since ``since`` whose clip is saved:
+    ``loud`` is the gate's measure on the clip's first 1.6 s, which IS the audio the live detector fired on."""
+    loader = loader or load_audio
+    tns = pvl.turns(pvl.events(lines))
+    clips = [c for d in corpus_dirs for c in pvl.corpus_index(str(d))]
+    out = []
+    for ti, c in sorted(pvl.match_clips(tns, clips).items(), key=lambda kv: kv[1].ts):
+        t = tns[ti]
+        if t.trigger != "wake" or t.trigger_ts < since:
+            continue
+        rms = chunk_rms(loader(c.path)[:GATE_CHUNKS * CHUNK])
+        out.append(dict(ts=t.trigger_ts.isoformat(timespec="seconds"), outcome=t.outcome,
+                        loud=round(max(rms, default=0.0), 1)))
+    return out
+
+
+def live_gate_table(wakes: Sequence[dict], floors: Sequence[float] = GATE_FLOORS) -> list:
+    """Per floor: how many heard wakes (outcome ``turn``) and empty-chime wakes the gate would have blocked."""
+    heard = [w["loud"] for w in wakes if w["outcome"] == "turn"]
+    empty = [w["loud"] for w in wakes if w["outcome"] == "empty"]
+    return [dict(floor=f, heard=len(heard), heard_blocked=sum(1 for v in heard if v < f),
+                 empty=len(empty), empty_blocked=sum(1 for v in empty if v < f)) for f in floors]
+
+
+def replay_gate_table(clips: Sequence[dict], *, floor: float, live: dict, lead_s: float, loader=None) -> dict:
+    """{set: {n, hours, wakes, gated_wakes, per_hour, gated_per_hour, clips_woke, gated_clips_woke}} at the live
+    threshold, from a saved run's frame scores. Audio is read only for clips that wake (a missing file keeps its wakes:
+    the gate is never credited with a block it could not measure). ``positive`` counts as in ``curve``."""
+    loader = loader or load_audio
+    lead = int(round(lead_s * SR / CHUNK))
+    out: dict = {}
+    for c in clips:
+        row = out.setdefault(c["set"], dict(n=0, hours=0.0, wakes=0, gated_wakes=0, clips_woke=0, gated_clips_woke=0,
+                                            unreadable=0))
+        row["n"] += 1
+        row["hours"] += float(c["seconds"]) / 3600.0
+        ws = _counted_wakes(c, c["set"], live["threshold"], live)
+        if not ws:
+            continue
+        try:
+            rms = chunk_rms(loader(c["path"]))
+        except Exception:  # noqa: BLE001 - a moved / unreadable clip
+            rms = None
+            row["unreadable"] += 1
+        kept = [w for w in ws if rms is None or window_loudest(rms, int(round(w / FRAME_S)) - lead) >= floor]
+        row["wakes"] += len(ws)
+        row["gated_wakes"] += len(kept)
+        row["clips_woke"] += 1
+        row["gated_clips_woke"] += 1 if kept else 0
+    for row in out.values():
+        h = row["hours"]
+        row["per_hour"] = row["wakes"] / h if h > 0 else float("nan")
+        row["gated_per_hour"] = row["gated_wakes"] / h if h > 0 else float("nan")
+    return out
+
+
+def render_gate(live_rows: Sequence[dict], wakes: Sequence[dict], replay: Optional[dict], *, floor: float,
+                threshold: float) -> str:
+    out = ["## Wake-time energy gate", "",
+           f"Measure: int16 RMS of the loudest 80 ms chunk in the 1.6 s the detector scored. Gate floor {floor:.0f}.", "",
+           "### Live wake-word turns (orb taps excluded): the saved clip's pre-roll", "",
+           "| floor | heard wakes blocked | empty-chime wakes blocked |", "|---|---|---|"]
+    out += [f"| {r['floor']:.0f} | {r['heard_blocked']}/{r['heard']} | {r['empty_blocked']}/{r['empty']} |" for r in live_rows]
+    for name in ("turn", "empty"):
+        vals = sorted(w["loud"] for w in wakes if w["outcome"] == name)
+        if vals:
+            q = quantiles(vals, (0.0, 0.1, 0.5, 0.9, 1.0))
+            out.append("")
+            out.append(f"{'Heard' if name == 'turn' else 'Empty-chime'} wakes, loudest chunk: "
+                       + ", ".join(f"p{int(float(k) * 100)} {v:.0f}" for k, v in q.items()))
+    if replay:
+        out += ["", f"### Replay at threshold {threshold:.2f}: confirmed wakes with and without the gate", "",
+                "| set | clips | hours | wakes | per hour | wakes with gate | per hour with gate |", "|---|---|---|---|---|---|---|"]
+        for name in sorted(replay):
+            r = replay[name]
+            out.append(f"| {name} | {r['n']} | {r['hours']:.2f} | {r['wakes']} | {_num(r['per_hour'])} | "
+                       f"{r['gated_wakes']} | {_num(r['gated_per_hour'])} |")
+        pooled = [replay[s] for s in POOLED if s in replay]
+        hrs = sum(r["hours"] for r in pooled)
+        if hrs > 0:
+            out.append("")
+            out.append(f"Pooled ({', '.join(s for s in POOLED if s in replay)}): "
+                       f"{sum(r['wakes'] for r in pooled) / hrs:.2f} wakes per hour without the gate, "
+                       f"{sum(r['gated_wakes'] for r in pooled) / hrs:.2f} with it, over {hrs:.2f} h.")
+    return "\n".join(out)
+
+
+def cmd_gate(args) -> int:
+    synth = synthetic_gate_rows(args.floor)
+    if args.synthetic_only:
+        print(render_synthetic(synth, args.floor))
+        return 0 if synthetic_verdict(synth) else 1
+    lines = pvl.fetch_lines(args.voice_log)
+    dirs = [args.corpus] + (args.extra_corpus or [str(QUARANTINED_WAKES)])
+    wakes = live_wake_levels(lines, dirs, since=args.wakes_since)
+    replay, threshold = None, args.threshold if args.threshold is not None else LIVE["threshold"]
+    scores = Path(args.scores).expanduser()
+    if not args.no_replay and scores.is_file():
+        data = json.loads(scores.read_text())
+        meta = data.get("meta") or {}
+        live, _budget = _settings_from(args, meta.get("settings"))
+        threshold = live["threshold"]
+        replay = replay_gate_table(data["clips"], floor=args.floor, live=live, lead_s=float(meta.get("lead_s", 2.0)))
+    md = render_gate(live_gate_table(wakes, sorted(set(GATE_FLOORS) | {args.floor})), wakes, replay,
+                     floor=args.floor, threshold=threshold)
+    md += "\n\n" + render_synthetic(synth, args.floor)
+    print(md)
+    if args.json:
+        out = _private_dir(Path(args.json).expanduser().parent)
+        _write_private(out / Path(args.json).name, json.dumps(dict(floor=args.floor, wakes=wakes, replay=replay, synthetic=synth), indent=1))
+    return 0
 
 
 def _date(raw: str) -> dt.datetime:
@@ -894,6 +1101,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         "tv is the 0/N constraint")
     r.add_argument("--speex-ns", choices=("auto", "on", "off"), default="auto",
                    help="Speex noise suppression like the panel daemon (auto = on when speexdsp_ns is importable)")
+    r.add_argument("--vad-threshold", type=float, default=0.0,
+                   help="an arm, not the panel's setting: openWakeWord's own Silero VAD gate (needs silero_vad.onnx in "
+                        "the openwakeword install's resources/models)")
     r.add_argument("--no-followups", action="store_true", help="skip the panel's follow-up turns")
     r.add_argument("--positives-since", type=_date, default=PREROLL_20_SINCE)
     r.add_argument("--limit", type=int, default=0, help="at most N clips per set (a smoke run)")
@@ -911,8 +1121,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     rp.add_argument("--scores", default=str(DEFAULT_OUT / "scores.json"))
     rp.add_argument("--no-nearmiss", action="store_true")
 
+    g = sub.add_parser("gate", help="the wake-time energy gate over the live wakes and a saved run (no model)")
+    common(g, live=True)
+    g.add_argument("--floor", type=float, default=GATE_FLOOR, help="the gate floor (the daemon's WAKE_ENERGY_FLOOR)")
+    g.add_argument("--corpus", default=str(CORPUS))
+    g.add_argument("--extra-corpus", action="append", default=[], metavar="DIR",
+                   help="more clip folders to join (default: the quarantined noise wakes)")
+    g.add_argument("--wakes-since", type=_date, default=dt.datetime(2026, 11, 1))
+    g.add_argument("--scores", default=str(DEFAULT_OUT / "scores.json"))
+    g.add_argument("--no-replay", action="store_true", help="skip the saved run; the live wake table only")
+    g.add_argument("--synthetic-only", action="store_true",
+                   help="only the generated near-silence / quiet-phrase classes: no log, no clips (exit 1 if they overlap)")
+    g.add_argument("--json", help="also write the rows here (outside the repo, mode 600)")
+
     args = ap.parse_args(argv)
-    return dict(nearmiss=cmd_nearmiss, run=cmd_run, report=cmd_report)[args.cmd](args)
+    return dict(nearmiss=cmd_nearmiss, run=cmd_run, report=cmd_report, gate=cmd_gate)[args.cmd](args)
 
 
 if __name__ == "__main__":

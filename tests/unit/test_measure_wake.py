@@ -751,3 +751,102 @@ def test_the_speex_setting_is_saved_in_scores_meta_and_shown_by_report(monkeypat
     assert mw.cmd_run(_run_args(tmp_path, speex_ns="auto")) == 0
     assert seen["speex_ns"] is True
     assert json.loads((tmp_path / "out" / "scores.json").read_text())["meta"]["settings"]["speex_ns"] is True
+
+
+# ------------------------------------------------------------------ the wake-time energy gate arm (no model)
+
+def test_gate_floor_and_window_match_the_daemon():
+    src = (REPO / "scripts" / "setup" / "zoe_voice_daemon.py").read_text()
+    assert f'_float_env("WAKE_ENERGY_FLOOR", {mw.GATE_FLOOR})' in src
+    assert f"_WAKE_GATE_CHUNKS = {mw.GATE_CHUNKS} " in src
+
+
+def test_chunk_rms_removes_the_mean_and_window_loudest_looks_back_twenty_chunks():
+    np = pytest.importorskip("numpy")
+    quiet = np.full(mw.CHUNK, 400.0)                                  # DC only: silent
+    loud = 1000.0 * np.sign(np.sin(2 * np.pi * 400 * np.arange(mw.CHUNK) / mw.SR)) + 400.0
+    rms = mw.chunk_rms(np.concatenate([loud] + [quiet] * 25))
+    assert rms[0] == pytest.approx(1000.0, rel=0.01) and max(rms[1:]) < 1.0
+    assert mw.window_loudest(rms, 19) == pytest.approx(1000.0, rel=0.01)   # chunks 0..19
+    assert mw.window_loudest(rms, 20) < 1.0                                # chunks 1..20: the loud one has left
+    assert mw.window_loudest(rms, -3) == 0.0                               # a fire inside the zero lead
+
+
+GATE_LOG = [
+    line("2026-11-20 09:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
+    line("2026-11-20 09:00:03", "Recorded command: duration=3.20s chunks=40 stop=silence"),
+    line("2026-11-20 09:00:05", "turn_stream TTFA=0.90s len=12 utt=0123456789ab"),
+    line("2026-11-20 10:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
+    line("2026-11-20 10:00:03", "Recorded command: duration=4.64s chunks=58 stop=silence"),
+    line("2026-11-20 10:00:04", "Empty transcript with no audio — retry chime."),
+    line("2026-11-20 11:00:00", "Orb-tap activation received — triggering wake sequence"),
+    line("2026-11-20 11:00:00", "Wake word detected! Notifying Jetson and waking screen..."),
+    line("2026-11-20 11:00:03", "Recorded command: duration=2.40s chunks=30 stop=silence"),
+    line("2026-11-20 11:00:04", "Empty transcript with no audio — retry chime."),
+]
+
+
+def test_live_wake_levels_split_heard_from_empty_and_skip_orb_taps(tmp_path):
+    np = pytest.importorskip("numpy")
+    for name, secs, ts in (("20261120-090004_000.wav", 3.20, dt.datetime(2026, 11, 20, 9, 0, 4)),
+                           ("20261120-100004_000.wav", 4.64, dt.datetime(2026, 11, 20, 10, 0, 4)),
+                           ("20261120-110004_000.wav", 2.40, dt.datetime(2026, 11, 20, 11, 0, 4))):
+        _tone_wav(tmp_path / name, secs, ts)
+    level = {"090004": 3000.0, "100004": 40.0, "110004": 40.0}
+
+    def loader(path):
+        amp = next(v for k, v in level.items() if k in path)
+        return amp * np.sign(np.sin(np.arange(4 * mw.SR)))
+    wakes = mw.live_wake_levels(GATE_LOG, [str(tmp_path)], since=dt.datetime(2026, 11, 1), loader=loader)
+    assert [(w["outcome"], round(w["loud"], -1)) for w in wakes] == [("turn", 3000.0), ("empty", 40.0)]   # no orb row
+    rows = {r["floor"]: r for r in mw.live_gate_table(wakes, (20.0, 550.0, 5000.0))}
+    assert (rows[550.0]["heard_blocked"], rows[550.0]["empty_blocked"]) == (0, 1)
+    assert (rows[20.0]["empty_blocked"], rows[5000.0]["heard_blocked"]) == (0, 1)       # controls on both sides
+    assert mw.live_wake_levels(GATE_LOG, [str(tmp_path)], since=dt.datetime(2026, 11, 21), loader=loader) == []
+
+
+def test_replay_gate_blocks_only_wakes_fired_on_a_quiet_window():
+    np = pytest.importorskip("numpy")
+    lead = 25                                                           # 2.0 s of zero lead, in frames
+    frames = [0.0] * (lead + 60)
+    for i in (lead + 20, lead + 21, lead + 22):
+        frames[i] = 0.9
+    audio = {"quiet.wav": np.random.default_rng(0).normal(0, 40, 60 * mw.CHUNK),
+             "loud.wav": np.random.default_rng(0).normal(0, 3000, 60 * mw.CHUNK)}
+    clips = [dict(set="omi", path=p, seconds=4.8, frames=frames) for p in ("quiet.wav", "loud.wav", "gone.wav")]
+    live = dict(mw.LIVE, threshold=0.5)
+
+    def loader(path):
+        return audio[path]                                              # gone.wav raises KeyError: unreadable
+    t = mw.replay_gate_table(clips, floor=550.0, live=live, lead_s=2.0, loader=loader)["omi"]
+    assert (t["wakes"], t["gated_wakes"], t["unreadable"]) == (3, 2, 1)     # quiet blocked; loud + unreadable kept
+    assert t["gated_per_hour"] == pytest.approx(2 / (3 * 4.8 / 3600))
+    open_gate = mw.replay_gate_table(clips, floor=0.0, live=live, lead_s=2.0, loader=loader)["omi"]
+    assert open_gate["gated_wakes"] == 3                                    # control: a floor of 0 blocks nothing
+    md = mw.render_gate(mw.live_gate_table([]), [], {"omi": t}, floor=550.0, threshold=0.5)
+    assert "| omi | 3 | 0.00 | 3 |" in md and "| 2 |" in md
+
+
+def test_scorer_passes_the_vad_arm_only_when_asked(tmp_path):
+    mw.OwwScorer(tmp_path / "m.onnx", tmp_path, model_factory=_FakeModel, vad_threshold=0.5)
+    assert _FakeModel.instances[-1].kw["vad_threshold"] == 0.5
+    mw.OwwScorer(tmp_path / "m.onnx", tmp_path, model_factory=_FakeModel)
+    assert "vad_threshold" not in _FakeModel.instances[-1].kw
+
+
+def test_synthetic_classes_separate_at_the_shipped_floor_and_not_at_a_wrong_one(capsys):
+    """The gate arm's near-silence negative class (generated, no recordings). Controls: a floor at 0 blocks no
+    near-silence and a floor above the quietest phrase blocks a quiet phrase - both turn the verdict red, so the
+    verdict is not vacuous. Negative control run: GATE_FLOOR set to 3000 in measure_wake.py -> this test failed."""
+    pytest.importorskip("numpy")
+    rows = mw.synthetic_gate_rows(mw.GATE_FLOOR)
+    sil = [r for r in rows if r["cls"] == "near_silence"]
+    phr = [r for r in rows if r["cls"] == "quiet_phrase"]
+    assert sil and phr and mw.synthetic_verdict(rows)
+    assert max(r["loud_max"] for r in sil) == pytest.approx(273.0, rel=0.02)     # the loudest silent wake logged
+    assert min(r["loud_min"] for r in phr) == pytest.approx(694.0, rel=0.02)     # 10 dB under the quietest real wake
+    assert not mw.synthetic_verdict(mw.synthetic_gate_rows(0.0))
+    assert not mw.synthetic_verdict(mw.synthetic_gate_rows(1000.0))
+    assert mw.main(["gate", "--synthetic-only"]) == 0
+    assert "Verdict: PASS" in capsys.readouterr().out
+    assert mw.main(["gate", "--synthetic-only", "--floor", "1000"]) == 1
