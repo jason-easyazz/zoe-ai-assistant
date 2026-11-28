@@ -60,7 +60,17 @@ three sets: fail closed.
 **The flag.** `ZOE_NOTIFICATIONS_PANEL_TOUCH` = `on` (default) | `off`, read per call. Off = the press is exactly the old one:
 `/api/panel/notifications/open` answers 404 for every caller (a member's own session included), the inbox poll carries no
 `notify_touch`, and the page - which learns the flag only from that poll it already makes - never asks `/open`, so the mic opens
-with no round trip first.
+with no round trip first. **Off is also everything else as it was before the flag**: reminder receipts count and are listed again
+(`unread`, `unread_count`, the kiosk dot - so the spoken tail's number is unchanged), a member's card is the old one (every row,
+nothing folded, "Done", no "Not now", no tap targets, no "Clear all" - `_card_flag_off`), a cleared voice ask is asked again when
+its batch changes, `clear_all` is not an action, and a card action triggers no extra inbox poll. Pinned against rows captured
+from an export of main 75046b677 (`test_touch_flag_off_answers_what_main_answers_...`).
+
+**What the panel may show or clear (privacy).** Only a PLAIN row: no payload, or a JSON object with no truthy `sensitive`. It is
+decided twice and fails closed both times: `_PLAIN` (text SQL that reads the same on Postgres and SQLite - an object that does
+not mention "sensitive" at all) and then `_sealed` on each row (`is_sensitive`'s truthiness; a payload that cannot be read as an
+object counts as sensitive). So `{"sensitive": 1}`, `"true"`, an escaped key and a malformed payload are never shown, never
+counted in a folded row and never cleared from the panel - its clears update only the ids that passed (`_clear_plain`).
 
 **Clear stays cleared.** Clear = `delivered = 1`; every read filters on it. What used to bring rows back, and the rule now:
 

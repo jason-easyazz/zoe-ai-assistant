@@ -820,3 +820,133 @@ def test_the_panel_cannot_clear_or_read_an_ask_addressed_to_one_member_and_contr
     mine = run(ns.card(PANEL, MEMBER))
     ask = next(it for it in mine["items"] if it["text"] == ns.WEARER_TITLE)
     assert [a["key"] for a in ask["actions"]] == ["me", "not_me", "clear"]
+
+
+# ZOE_NOTIFICATIONS_PANEL_TOUCH off must be main. This is what main 75046b677 answered for the rows ``_main_rows`` writes, captured
+# by running that scenario in a ``git archive`` export of 75046b677 (never from this branch): every unread row counts and is
+# listed (the three reminder receipts too), and the three pendant-sync rows are three rows, each with "Done".
+_MAIN_ORDER = [["nt0", "note"], ["sy2", "omi_sync"], ["sy1", "omi_sync"], ["sy0", "omi_sync"], ["rc2", "reminder_acknowledged"],
+               ["rc1", "reminder_snoozed"], ["rc0", "reminder_created"]]
+_MAIN_ROWS = [("A note", "the demo bar is open"), ("Pendant synced", "3 new recordings"), ("Pendant synced", "2 new recordings"),
+              ("Pendant synced", "1 new recordings")] + [("Reminder Created", "Reminder added: water the womble")] * 3
+MAIN_75046B677 = {
+    "kiosk_dot_receipts_only": True, "unread": _MAIN_ORDER, "unread_count": 7, "inbox_notify": 7,
+    "card": {"panel_id": "panel-1", "member_id": "member-a", "kind": "notifications", "private": True, "title": "Notifications",
+             "subtitle": "", "more": 0, "more_label": "", "empty": "No new notifications.", "endpoint": "/api/panel/notifications",
+             "items": [{"id": f"n{i + 1}", "text": t, "meta": m, "actions": [{"key": "done", "label": "Done"}]}
+                       for i, (t, m) in enumerate(_MAIN_ROWS)]},
+    "reg": {f"n{i + 1}": {"type": "note", "ref": nid} for i, (nid, _) in enumerate(_MAIN_ORDER)},
+}
+
+
+def _main_rows(env):
+    """The capture scenario, line for line: three receipts, three pendant-sync rows, one note; what the stores answer for them."""
+    from routers import proactive as r
+
+    def raw(nid, type_, title, message, data, at):
+        env.conn.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) VALUES (?,?,?,?,?,?,0,?)",
+                         (nid, MEMBER, type_, title, message, data, f"2026-11-28T10:00:{at:02d}+00:00"))
+        env.conn.commit()
+    out = {}
+    for i, t in enumerate(("reminder_created", "reminder_snoozed", "reminder_acknowledged")):
+        raw(f"rc{i}", t, "Reminder Created", "Reminder added: water the womble", "{}", i)
+    out["kiosk_dot_receipts_only"] = run(r.pending_inbox(GUEST)).get("notify_any")
+    for i in range(3):
+        raw(f"sy{i}", "omi_sync", "Pendant synced", f"{i + 1} new recordings", json.dumps({"count": i + 1}), 10 + i)
+    raw("nt0", "note", "A note", "the demo bar is open", "{}", 20)
+    out["unread"] = [[n["id"], n["type"]] for n in run(ns.unread(MEMBER, limit=50))]
+    out["unread_count"] = run(ns.unread_count(MEMBER))
+    out["inbox_notify"] = run(r.pending_inbox({"user_id": MEMBER, "role": "user"})).get("notify")
+    frame = run(ns.card(PANEL, MEMBER))
+    out["reg"] = prc._CARDS[frame.pop("card_token")].items
+    out["card"] = frame
+    return out
+
+
+def test_touch_flag_off_answers_what_main_answers_for_receipts_and_repeated_sync_rows_and_control(env, monkeypatch):
+    """Flag off = main 75046b677 for the member's unread rows, count (the spoken tail's number), dot, card and what a tap may
+    touch. Negative controls run 2026-11-28, each red here: ``_receipts_out`` returning the filter always (count 4, not 7);
+    ``card`` without its ``_card_flag_off`` branch (one folded "Clear" row); ``act`` taking "clear" / a folded kind with the flag
+    off; the router's ``clear_all`` without ``touch_enabled()``. In-test control: the same rows with the flag on differ."""
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "off")
+    assert _main_rows(env) == MAIN_75046B677
+    # a card minted while the flag was on does not keep the new acts once it is off: main knew no "Not now", no whole-kind clear
+    with pytest.raises(ns.ActError) as exc:
+        run(ns.act(MEMBER, {"type": "wearer", "ref": "p1", "nid": "x", "batch": []}, "clear"))
+    assert exc.value.status == 400
+    assert run(ns.act(MEMBER, {"type": "note", "ref": "sy2", "kind": "omi_sync"}, "done")) == {"ok": True}
+    assert run(ns.unread_count(MEMBER)) == 6                                           # the one row, not the whole kind
+    c = _client(monkeypatch, {"user_id": MEMBER, "role": "user"}, at_panel=False)
+    tok = run(ns.card(PANEL, MEMBER))["card_token"]
+    assert c.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers={"X-Panel-Card": tok}).status_code == 404
+    assert run(ns.unread_count(MEMBER)) == 6
+    # control: the same rows with the flag on are NOT what main answered (so the comparison above can fail)
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "on")
+    env.conn.execute("DELETE FROM notifications")
+    prc.reset()
+    on = _main_rows(env)
+    assert on["unread_count"] == 4 and on["kiosk_dot_receipts_only"] is False and len(on["card"]["items"]) == 2
+    assert on["card"]["clear_all"] == "Clear all" and on != MAIN_75046B677
+
+
+def test_touch_flag_off_a_cleared_voice_ask_is_asked_again_as_on_main_and_control(env, monkeypatch):
+    """Main asked again when the open batch changed after a clear; "cleared stays cleared" is the flag's. Negative control run
+    2026-11-28: ``notify_wearer_proposals`` reading ``_asked_proposals`` with the flag off -> None here, red."""
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "off")
+    _fake_repass(monkeypatch, props=("p1", "p2"))
+    first = run(ns.notify_wearer_proposals(MEMBER))
+    assert first and run(ns.mark_read(MEMBER, first, "later"))
+    _fake_repass(monkeypatch, props=("p1",))                                           # the batch shrank
+    again = run(ns.notify_wearer_proposals(MEMBER))
+    assert again and again != first
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "on")                          # control: flag on, the shrunk batch is not re-asked
+    assert run(ns.mark_read(MEMBER, again, "later"))
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None
+
+
+SENSITIVE_FORMS = ['{"sensitive": 1}', '{"sensitive": "true"}', '{"sensitive": true}', '{"sensitive":true}', '{"Sensitive": true, "sensitive": 2}',
+                   '{"kind": "low", "sens\\u0069tive": true}',                         # an escaped key json reads as "sensitive"
+                   'not json at all', '{"kind": "low", "sensi', '{"kind": tru}', '[1, 2]', '"words"']
+
+
+@pytest.mark.parametrize("payload", SENSITIVE_FORMS)
+def test_every_truthy_or_unreadable_sensitive_payload_is_kept_off_the_panel_and_control(env, monkeypatch, payload):
+    """PRIVACY: a row is the panel's to show or clear only when its payload provably carries no ``sensitive`` - every truthy form
+    (1, "true", true, no space) and a payload that cannot be read as an object (malformed, cut short) count as sensitive, for
+    the card, for Clear on a folded row and for Clear all. Negative controls run 2026-11-28, each red here: ``_PLAIN`` back to
+    the literal ``'%"sensitive": true%'`` with ``_sealed`` returning False (1 / "true" / malformed shown and cleared);
+    ``_clear_plain`` not re-reading with ``_sealed`` (the escaped key and ``{"kind": tru}`` cleared); ``panel_card`` not dropping
+    ``sealed`` rows (the same two shown). In-test control: the plain rows beside it are shown and cleared."""
+    _raw(env, "hs", MEMBER, "omi_health", "Pendant", "private pendant line", payload)
+    _raw(env, "ss", MEMBER, "omi_sync", "Pendant synced", "private sync line", payload)
+    _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.", json.dumps({"kind": "low"}))
+    _raw(env, "s1", MEMBER, "omi_sync", "Pendant synced", "one new recording", json.dumps({"count": 1}))
+    _raw(env, "h0", MEMBER, "omi_health", "Pendant", "The pendant is nearly full.", None)       # control: no payload at all is plain
+    k = _client(monkeypatch, GUEST, at_panel=True)
+    frame = k.post("/api/panel/notifications/open", json={}).json()
+    text = json.dumps(frame)
+    assert "private pendant line" not in text and "private sync line" not in text and "earlier" not in text
+    assert "battery is low" in text and "nearly full" in text and "one new recording" in text   # control
+    held = prc._CARDS[frame["card_token"]].items
+    assert sorted(v["ref"] for v in held.values()) == ["h0", "h1", "s1"]
+    h = {"X-Panel-Card": frame["card_token"]}
+    sync = next(it for it in frame["items"] if it["text"] == "Pendant synced")
+    assert k.post("/api/panel/notifications/act", json={"item": sync["id"], "action": "done"}, headers=h).json() == {"ok": True}
+    assert k.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers=h).json() == {"ok": True, "cleared": 2}
+    assert {r[0] for r in env.rows("SELECT id FROM notifications WHERE delivered = 0")} == {"hs", "ss"}
+
+
+def test_a_false_or_absent_sensitive_key_is_not_hidden_by_the_python_reading_and_the_sql_only_errs_closed():
+    """``_sealed`` is ``is_sensitive``'s truthiness plus fail-closed on an unreadable payload; ``_PLAIN`` (text SQL, one reading on
+    Postgres and SQLite) may only ever be STRICTER. Negative control run 2026-11-28: ``_sealed`` returning False on ValueError."""
+    for raw, sealed in [(None, False), ("", False), ("{}", False), ('{"sensitive": false}', False), ('{"sensitive": 0}', False),
+                        ('{"sensitive": null}', False), ('{"sensitive": ""}', False), ('{"sensitive": 1}', True),
+                        ('{"sensitive": "true"}', True), ('{"sensitive": true}', True), ("{oops", True), ("[]", True), ("7", True)]:
+        assert ns._sealed(raw) is sealed, raw
+        if not sealed and raw:
+            assert ns.is_sensitive({"data": json.loads(raw)}) is False
+    con = sqlite3.connect(":memory:")
+    plain = lambda raw: bool(con.execute(f"SELECT {ns._PLAIN.replace('data', '?')}", (raw,) * ns._PLAIN.count("data")).fetchone()[0])  # noqa: E731
+    assert plain(None) and plain("") and plain("{}") and plain('{"count": 2}')
+    for raw in SENSITIVE_FORMS[:5] + ['{"sensitive": false}', "not json at all", '{"kind": "low", "sensi', "[1, 2]"]:
+        assert not plain(raw), raw

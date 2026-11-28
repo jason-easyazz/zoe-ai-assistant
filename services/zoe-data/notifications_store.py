@@ -59,7 +59,12 @@ PANEL_WORDS_ONLY = ("ops_alerting_broken",)
 PANEL_TITLE_ONLY = (WEARER_TYPE, "transcript_check")
 PANEL_SHOWN_TYPES = frozenset(PANEL_DEVICE_TYPES + PANEL_WORDS_ONLY + PANEL_TITLE_ONLY)
 PANEL_TITLE_ONLY_META = "Tap, then say \"what's up?\" so I know it's you."
-_PLAIN = "(data IS NULL OR data NOT LIKE '%\"sensitive\": true%')"     # ``create`` writes the key exactly so (json.dumps)
+# PLAIN = the panel itself may show and clear the row. Text SQL that reads the same on Postgres and SQLite (``data`` is TEXT), and it
+# FAILS CLOSED: no payload, or a JSON object that does not mention "sensitive" anywhere. So every truthy form (true, 1, "true",
+# ``"sensitive":true``) is private, and so is a payload that is not an object (malformed, cut short) - stricter than
+# ``is_sensitive``, never looser (a ``"sensitive": false`` row is private too; no creator writes one). ``_sealed`` re-reads every
+# row the panel would SHOW with ``is_sensitive``'s own truthiness, so an escaped key or broken JSON inside braces is not shown.
+_PLAIN = "(data IS NULL OR data = '' OR (data LIKE '{%}' AND LOWER(data) NOT LIKE '%sensitive%'))"
 _OF_A_MEMBER = "user_id IN (SELECT id FROM users WHERE COALESCE(role, '') <> 'guest')"
 # what a tap on a row opens: an estate screen of ``dist/touch/home.html``, or "voice" (the mic, so a voice can prove who it is)
 OPEN_BY_TYPE = {"reminder": "reminder", "transcript_check": "checks", "omi_health": "settings", "omi_sync": "settings",
@@ -133,6 +138,24 @@ def is_sensitive(n: dict) -> bool:
     return bool((n.get("data") or {}).get("sensitive"))
 
 
+def _sealed(raw: Any) -> bool:
+    """The panel's own reading of a stored payload: ``is_sensitive``'s truthiness, and a payload that cannot be read as a JSON
+    object counts as sensitive (fail closed)."""
+    if raw is None or raw == "":
+        return False
+    try:
+        d = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return True
+    return not isinstance(d, dict) or bool(d.get("sensitive"))
+
+
+def _receipts_out() -> str:
+    """The SQL that leaves the reminder receipts out of a member's unread rows. ``ZOE_NOTIFICATIONS_PANEL_TOUCH`` off = "" (every
+    unread row counts and is listed, as before the flag existed - the spoken tail's count included)."""
+    return f" AND {_NO_RECEIPTS}" if touch_enabled() else ""
+
+
 # -- the store ---------------------------------------------------------------------------------------------------------------------
 async def create(user_id: str, type: str, title: str, message: str, data: Optional[dict] = None, *, dedupe_id: Optional[str] = None,
                  sensitive: bool = False, scheduled_at: Optional[int] = None) -> Optional[str]:
@@ -182,8 +205,8 @@ async def unread(user_id: str, limit: int = MAX_CARD) -> list[dict]:
         return []
     try:
         async with _db() as db:
-            cur = await db.execute("SELECT id, type, title, message, data, created_at FROM notifications WHERE user_id = ? AND delivered = 0 "
-                                   f"AND {_NO_RECEIPTS} ORDER BY created_at DESC LIMIT ?", (uid, int(limit)))
+            cur = await db.execute("SELECT id, type, title, message, data, created_at FROM notifications WHERE user_id = ? AND delivered = 0"
+                                   f"{_receipts_out()} ORDER BY created_at DESC LIMIT ?", (uid, int(limit)))
             rows = await cur.fetchall()
     except Exception as exc:  # noqa: BLE001
         logger.debug("notifications: unread failed (%s)", exc.__class__.__name__)
@@ -197,7 +220,7 @@ async def unread_count(user_id: str) -> int:
         return 0
     try:
         async with _db() as db:
-            cur = await db.execute(f"SELECT COUNT(*) FROM notifications WHERE user_id = ? AND delivered = 0 AND {_NO_RECEIPTS}", (uid,))
+            cur = await db.execute(f"SELECT COUNT(*) FROM notifications WHERE user_id = ? AND delivered = 0{_receipts_out()}", (uid,))
             row = await cur.fetchone()
         return int(row[0] or 0) if row else 0
     except Exception:  # noqa: BLE001
@@ -372,7 +395,7 @@ async def notify_wearer_proposals(user_id: str) -> Optional[str]:
         return None
     # cleared stays cleared: an ask the member already cleared or answered covered these proposals. A batch that only SHRANK since
     # (one expired, one decided) hashes differently but asks nothing new, so it is not asked again; a proposal never asked about is.
-    if set(ids) <= await _asked_proposals(uid):
+    if touch_enabled() and set(ids) <= await _asked_proposals(uid):
         return None
     batch = hashlib.sha256("|".join(ids).encode()).hexdigest()[:16]
     return await create(uid, WEARER_TYPE, WEARER_TITLE, WEARER_MESSAGE, {"proposals": ids}, dedupe_id=batch, scheduled_at=gen)
@@ -434,7 +457,7 @@ async def orb_any(caller: Optional[dict]) -> Optional[bool]:
         from proactive.pull import _member
 
         async with _db() as db:
-            cur = await db.execute(f"SELECT user_id, data FROM notifications WHERE delivered = 0 AND {_NO_RECEIPTS} "
+            cur = await db.execute(f"SELECT user_id, data FROM notifications WHERE delivered = 0{_receipts_out()} "
                                    "ORDER BY created_at DESC LIMIT 500")
             rows = await cur.fetchall()
         return any(_account(str(r[0])) and _member(str(r[0])) and not _parse(r[1]).get("sensitive") for r in rows)
@@ -496,22 +519,30 @@ def _note_item(key: str, n: dict, household: bool) -> dict:
 
 def _row(r) -> dict:
     return {"id": r[0], "user_id": str(r[1]), "type": r[2], "title": r[3] or "", "message": r[4] or "", "data": _parse(r[5]),
-            "created_at": r[6]}
+            "created_at": r[6], "sealed": _sealed(r[5])}
 
 
 _COLS = "id, user_id, type, title, message, data, created_at"
 _FOLDED = "type IN (" + ", ".join(f"'{t}'" for t in sorted(COLLAPSE_TYPES)) + ")"
 
 
-async def _folded(db, where: str, params: tuple, limit: int) -> list[dict]:
+async def _folded(db, where: str, params: tuple, limit: int, *, plain: bool = False) -> list[dict]:
     """Unread rows matching ``where``, newest first, with every ``COLLAPSE_TYPES`` kind of a member folded BY KIND in SQL: its
-    newest row stands for all of them (``earlier`` = the rest, counted over the whole table, not over a read window)."""
+    newest row stands for all of them (``earlier`` = the rest, counted over the whole table, not over a read window).
+    ``plain`` (the panel's own card): a folded kind is read whole and only its rows ``_sealed`` passes stand or are counted."""
     cur = await db.execute(f"SELECT {_COLS} FROM notifications WHERE delivered = 0 AND {_NO_RECEIPTS} AND NOT {_FOLDED} AND {where} "
                            "ORDER BY created_at DESC LIMIT ?", (*params, int(limit)))
     rows = [_row(r) for r in await cur.fetchall()]
     cur = await db.execute(f"SELECT user_id, type, COUNT(*), MAX(created_at) FROM notifications WHERE delivered = 0 AND {_FOLDED} "
                            f"AND {where} GROUP BY user_id, type", params)
     for uid, type_, count, newest in await cur.fetchall():
+        if plain:
+            cur = await db.execute(f"SELECT {_COLS} FROM notifications WHERE delivered = 0 AND user_id = ? AND type = ? AND {where} "
+                                   "ORDER BY created_at DESC", (uid, type_, *params))
+            kept = [n for n in (_row(r) for r in await cur.fetchall()) if not n["sealed"]]
+            if kept:
+                rows.append({**kept[0], "earlier": len(kept) - 1})
+            continue
         cur = await db.execute(f"SELECT {_COLS} FROM notifications WHERE delivered = 0 AND user_id = ? AND type = ? AND created_at = ? "
                                f"AND {where} LIMIT 1", (uid, type_, newest, *params))
         top = await cur.fetchone()
@@ -557,6 +588,8 @@ async def card(panel_id: str, member: str, *, touch: bool = False) -> Optional[d
     uid = _account(member)
     if not enabled() or uid is None or not panel_id:
         return None
+    if not touch_enabled():
+        return await _card_flag_off(panel_id, uid)
     try:
         async with _db() as db:
             rows = await _folded(db, "user_id = ?", (uid,), 50)
@@ -586,6 +619,42 @@ async def card(panel_id: str, member: str, *, touch: bool = False) -> Optional[d
     return _frame(panel_id, uid, items, reg, private=True, touch=touch)
 
 
+async def _card_flag_off(panel_id: str, uid: str) -> Optional[dict]:
+    """``ZOE_NOTIFICATIONS_PANEL_TOUCH`` off: the member's card exactly as it was before the flag existed - every unread row
+    (receipts too), nothing folded, "Done" on a note, no "Not now", no tap target, no "Clear all". Goes when the flag goes."""
+    reg: dict = {}
+    items: list = []
+    for n in await unread(uid, limit=50):
+        if n["type"] == WEARER_TYPE:
+            props = await _open_proposals(uid, n)
+            if not props:
+                await mark_read(uid, n["id"], "stale")
+                continue
+            for p in props[:MAX_PROPOSALS]:
+                key = f"w{len(reg) + 1}"
+                reg[key] = {"type": "wearer", "ref": str(p["id"]), "nid": n["id"], "batch": list((n.get("data") or {}).get("proposals") or [])}
+                said = await _proposal_lines(uid, str(p["id"]))
+                meta = " / ".join(f'"{s}"' for s in said) if said else f"heard in {p.get('recordings', 0)} recordings"
+                items.append({"id": key, "text": n["title"], "meta": meta,
+                              "actions": [{"key": "me", "label": "That's me"}, {"key": "not_me", "label": "Not me"}]})
+        else:
+            key = f"n{len(reg) + 1}"
+            reg[key] = {"type": "note", "ref": n["id"]}
+            items.append({"id": key, "text": _short(n["title"], 80), "meta": _short(n["message"], 120),
+                          "actions": [{"key": "done", "label": "Done"}]})
+    if not items:
+        return None
+    more = len(items) - MAX_CARD
+    items = items[:MAX_CARD]
+    reg = {it["id"]: reg[it["id"]] for it in items}
+    import panel_review_cards as prc
+
+    tok = prc.mint(panel_id, uid, CARD_KIND, reg)
+    return {"panel_id": panel_id, "member_id": uid, "kind": CARD_KIND, "private": True, "title": "Notifications", "subtitle": "",
+            "items": items, "more": max(0, more), "more_label": f"And {more} more." if more > 0 else "", "empty": "No new notifications.",
+            "card_token": tok, "endpoint": ENDPOINT}
+
+
 async def panel_card(panel_id: str) -> Optional[dict]:
     """The PANEL's own card: what an orb press shows when nobody has been identified (the kiosk). See the kinds above
     ``PANEL_DEVICE_TYPES``: device notices in words with Clear, the owner alert in words, a member's ask as its title alone, every
@@ -595,7 +664,7 @@ async def panel_card(panel_id: str) -> Optional[dict]:
         return None
     try:
         async with _db() as db:
-            rows = await _folded(db, f"{_PLAIN} AND {_OF_A_MEMBER}", (), 500)
+            rows = await _folded(db, f"{_PLAIN} AND {_OF_A_MEMBER}", (), 500, plain=True)
     except Exception as exc:  # noqa: BLE001
         logger.debug("notifications: panel card unavailable (%s)", exc.__class__.__name__)
         return None
@@ -603,7 +672,7 @@ async def panel_card(panel_id: str) -> Optional[dict]:
     items: list = []
     from proactive.pull import _member
 
-    rows = [n for n in rows if _account(n["user_id"]) and _member(n["user_id"])]
+    rows = [n for n in rows if not n["sealed"] and _account(n["user_id"]) and _member(n["user_id"])]
     for n in rows:
         if n["type"] not in PANEL_SHOWN_TYPES:
             continue
@@ -617,20 +686,33 @@ async def panel_card(panel_id: str) -> Optional[dict]:
     return _frame(panel_id, PANEL_MEMBER, items, reg, private=False, touch=True)
 
 
+async def _clear_plain(db, where: str, params: tuple, how: str) -> int:
+    """The PANEL's clear: every unread row matching ``where`` that is plain - ``_PLAIN`` in SQL, then each payload re-read by
+    ``_sealed`` - with no read window. Only the ids that passed are updated, so a row that is or may be sensitive is never cleared."""
+    cur = await db.execute(f"SELECT id, data FROM notifications WHERE delivered = 0 AND {_PLAIN} AND {where}", params)
+    ids = [r[0] for r in await cur.fetchall() if not _sealed(r[1])]
+    n = 0
+    for i in range(0, len(ids), 400):
+        part = ids[i:i + 400]
+        cur = await db.execute("UPDATE notifications SET delivered = 1, action_taken = ? WHERE delivered = 0 AND id IN ("
+                               + ", ".join("?" for _ in part) + ")", (how, *part))
+        n += int(getattr(cur, "rowcount", 0) or 0)
+    return n
+
+
 async def clear_all(member: str) -> int:
-    """"Clear all" on a card: ONE update over every unread row its audience may clear - no read window, so the rows that did not
-    fit on the card and the ones past any query cap go too. A member's own card clears all of THEIR rows (the old receipts too)
-    except a "confirm this voice" ask (it wants an answer, or its own "Not now"). The panel's card clears the household's device
-    notices (``PANEL_DEVICE_TYPES``) only. Returns the rows cleared."""
+    """"Clear all" on a card: every unread row its audience may clear - no read window, so the rows that did not fit on the card
+    and the ones past any query cap go too. A member's own card clears all of THEIR rows (the old receipts too) except a "confirm
+    this voice" ask (it wants an answer, or its own "Not now"). The panel's card clears the household's plain device notices
+    (``PANEL_DEVICE_TYPES``) only. Returns the rows cleared."""
     async with _db() as db:
         if member == PANEL_MEMBER:
             kinds = ", ".join("?" for _ in PANEL_DEVICE_TYPES)
-            cur = await db.execute("UPDATE notifications SET delivered = 1, action_taken = 'cleared_panel' WHERE delivered = 0 "
-                                   f"AND type IN ({kinds}) AND {_PLAIN} AND {_OF_A_MEMBER}", tuple(PANEL_DEVICE_TYPES))
+            n = await _clear_plain(db, f"type IN ({kinds}) AND {_OF_A_MEMBER}", tuple(PANEL_DEVICE_TYPES), "cleared_panel")
         else:
             cur = await db.execute("UPDATE notifications SET delivered = 1, action_taken = 'cleared' WHERE user_id = ? AND delivered = 0 "
                                    "AND type <> ?", (member, WEARER_TYPE))
-        n = int(getattr(cur, "rowcount", 0) or 0)
+            n = int(getattr(cur, "rowcount", 0) or 0)
         await db.commit()
     logger.info("NOTIFY act=clear_all rows=%d panel=%d", n, int(member == PANEL_MEMBER))
     return n
@@ -639,9 +721,12 @@ async def clear_all(member: str) -> int:
 async def clear_kind(owner: str, kind: str, how: str, *, plain_only: bool) -> int:
     """Clear on a FOLDED row: every unread row of that kind of that member, in one update (never just the rows a card read)."""
     async with _db() as db:
-        cur = await db.execute(f"UPDATE notifications SET delivered = 1, action_taken = ? WHERE user_id = ? AND type = ? AND delivered = 0"
-                               + (f" AND {_PLAIN}" if plain_only else ""), (how, owner, kind))
-        n = int(getattr(cur, "rowcount", 0) or 0)
+        if plain_only:
+            n = await _clear_plain(db, "user_id = ? AND type = ?", (owner, kind), how)
+        else:
+            cur = await db.execute("UPDATE notifications SET delivered = 1, action_taken = ? WHERE user_id = ? AND type = ? AND delivered = 0",
+                                   (how, owner, kind))
+            n = int(getattr(cur, "rowcount", 0) or 0)
         await db.commit()
     return n
 
@@ -711,14 +796,14 @@ async def act(member: str, item: dict, action: str) -> dict:
             raise ActError(400, "unknown action")
         owner = str(item.get("user") or member)
         how = "done_panel" if member == PANEL_MEMBER else "done"
-        if item.get("kind") in COLLAPSE_TYPES:             # a folded row: the whole kind, not the rows one card happened to read
+        if item.get("kind") in COLLAPSE_TYPES and touch_enabled():   # a folded row: the whole kind, not the rows one card happened to read
             cleared = await clear_kind(owner, item["kind"], how, plain_only=member == PANEL_MEMBER)
         else:
             cleared = int(await mark_read(owner, item["ref"], how))
         if not cleared:
             raise ActError(409, "already decided")
         return {"ok": True}
-    if item.get("type") == "wearer" and action == "clear":      # "Not now": the ask is cleared, the proposals stay undecided
+    if item.get("type") == "wearer" and action == "clear" and touch_enabled():      # "Not now": the ask is cleared, the proposals stay undecided
         if not await mark_read(member, item["nid"], "later"):
             raise ActError(409, "already decided")
         return {"ok": True}

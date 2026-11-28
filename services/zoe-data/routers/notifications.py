@@ -223,7 +223,7 @@ class _Act(BaseModel):
 
 @panel_router.post("/act")
 async def panel_act(body: _Act, card: _prc.Card = Depends(_require_card)):
-    if body.action == "clear_all":                   # every row this card's audience may clear, shown or not
+    if body.action == "clear_all" and _store.touch_enabled():                   # every row this card's audience may clear, shown or not
         n = await _store.clear_all(card.member_id)
         for key in [k for k, v in card.items.items() if v.get("type") == "note"]:
             card.items.pop(key, None)

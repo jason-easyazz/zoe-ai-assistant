@@ -4365,11 +4365,11 @@
   // ONE notifications card (js/touch-review-cards.js), which the orb press / "what's up?" pushes to this panel - opened from here the same way.
   function wireSetNotes(){var s0=sessKey();
     Promise.all([apiGet('/api/notifications/pending'),apiGet('/api/proactive/inbox').catch(function(){return null;})]).then(function(r){
-      var ns=((r[0]&&r[0].notifications)||[]).filter(function(n){return !/^reminder_(created|snoozed|acknowledged)$/.test(String(n.type||''));}),card=!!(r[1]&&('notify' in r[1]));
+      var touch=!!(r[1]&&r[1].notify_touch===true),ns=((r[0]&&r[0].notifications)||[]).filter(function(n){return !touch||!/^reminder_(created|snoozed|acknowledged)$/.test(String(n.type||''));}),card=!!(r[1]&&('notify' in r[1]));
       if(!ns.length){_setLine('setNote','<div class="srow2"><span>No new notifications</span></div>',s0);return;}
       _setLine('setNote',ns.map(function(n){return '<div class="srow2"><span>'+esc(n.title||'Notification')
           +(n.message?' <small style="color:var(--ink-soft)">'+esc(String(n.message).slice(0,120))+'</small>':'')+'</span></div>';}).join('')
-        +(card?'<div class="srow2"><span>Clear, That’s me and the rest are on the card</span><button class="sbtn" data-act="notecard">Show the card</button></div>'
+        +(card?'<div class="srow2"><span>'+(touch?'Clear':'Done')+', That’s me and the rest are on the card</span><button class="sbtn" data-act="notecard">Show the card</button></div>'
           :'<div class="srow2"><span class="lderr">The notifications card isn’t switched on here.</span></div>'),s0);
     }).catch(function(e){_setErr('setNote','notifications',e,s0);});
   }
@@ -5326,8 +5326,8 @@
     if(!FULL[t]&&!CARD[t])return;
     if(window.ZoeVoiceSession&&window.ZoeVoiceSession.closeCard)window.ZoeVoiceSession.closeCard();
     show(t);});
-  // A row cleared (or answered): the dot is re-read now, not at the next minute's poll.
-  window.addEventListener('zoe:card-acted',function(){_orbPoll();});
+  // A row cleared (or answered): the dot is re-read now, not at the next minute's poll. Flag off (no `notify_touch`): no extra poll.
+  window.addEventListener('zoe:card-acted',function(){if(_listOn)_orbPoll();});
   function orbPull(){
     if(_convLive||_orbBusy)return;
     _orbBusy=true;

@@ -407,6 +407,14 @@ const LOOPS = { panel_id: P, member_id: 'casey', kind: 'open_loops', private: tr
     const o = orbBoot(html, { enabled: true, count: 1 }, FRAME, () => true);   // a card on screen changes nothing with the flag off
     await flush(); await flush(); o.press(); await flush();
     assert(opens(o).length === 0 && o.log.fetched[0] === 'http://localhost:7777/pull', 'flag off: a selector item pulls, as before');
+    // flag off: an accepted card action (any review card's Done) polls nothing extra - the dot is read by the minute poll, as before
+    const q = orbBoot(html, { enabled: true, count: 1 }, FRAME, () => false);
+    await flush(); await flush();
+    const polls = () => q.log.zf.filter((c) => c.url === '/api/proactive/inbox').length;
+    const before = polls();
+    q.emit('zoe:card-acted', { kind: 'open_loops' });
+    await flush();
+    assert.strictEqual(polls(), before, 'flag off: a card action never triggers an inbox poll');
   }
   for (const fn of [pressShowsTheList, pressFallsBack, listEventsReachTheEstate, flagOffIsTheOldPress]) await fn(homeHtml);
   await red(flagOffIsTheOldPress, plant(homeHtml, "else if(_listOn&&free&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);",
@@ -417,7 +425,10 @@ const LOOPS = { panel_id: P, member_id: 'casey', kind: 'open_loops', private: tr
     'the old press (a dot lit by notifications opens the mic)');
   await red(pressShowsTheList, plant(homeHtml, "if(_listOn&&listOpen())panelVoice();\n    else if(_listOn&&free", "if(_listOn&&free"),
     'a list that swallows the mic for good');
-  await red(listEventsReachTheEstate, plant(homeHtml, "window.addEventListener('zoe:card-acted',function(){_orbPoll();});", ''), 'a dot that stays lit after a clear');
+  await red(listEventsReachTheEstate, plant(homeHtml, "window.addEventListener('zoe:card-acted',function(){if(_listOn)_orbPoll();});", ''), 'a dot that stays lit after a clear');
+  await red(flagOffIsTheOldPress, plant(homeHtml, "function(){if(_listOn)_orbPoll();}", "function(){_orbPoll();}"), 'a flag-off card action that polls the inbox');
+  // Settings > Notifications reads the same flag: off = every pending row listed and the card's button named "Done", as before
+  assert(homeHtml.includes("return !touch||!/^reminder_(created|snoozed|acknowledged)$/") && homeHtml.includes("(touch?'Clear':'Done')"));
   await red(listEventsReachTheEstate, plant(homeHtml, "if(!FULL[t]&&!CARD[t])return;", ''), 'a row that can open anything');
 
   const vsAt = homeHtml.indexOf('/js/touch-voice-session.js');
