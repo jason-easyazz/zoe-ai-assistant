@@ -7,7 +7,9 @@
 #   - mtp-gemma-4-E4B-it.gguf              (~60 MB)  — the MTP speculative drafter
 # Optionally also fetches the two-stage router decoder (FunctionGemma-270M).
 #
-# Idempotent: files already present (non-empty) are skipped.
+# Safe to re-run: a file that already matches its pinned sha256 (models.lock) is not fetched again; a download goes to
+# <name>.part (resumable), is renamed only after size + sha256 match, then <name>.ready is written last. A failure is one
+# plain sentence and a non-zero exit; an existing good file is never deleted. Overrides: ZOE_MODELS_LOCK, ZOE_MODEL_BASE_URL.
 #
 # Usage:
 #   scripts/setup/download_gguf_models.sh [--models-dir DIR] [--with-router]
@@ -35,59 +37,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Prefer the modern `hf` CLI; fall back to the (deprecated) huggingface-cli.
-HF=""
-if have_cmd hf; then HF="hf"
-elif have_cmd huggingface-cli; then HF="huggingface-cli"
-else
-  log "Installing huggingface_hub CLI…"
-  pip3 install -U "huggingface_hub[cli]"
-  HF="hf"; have_cmd hf || HF="huggingface-cli"
-fi
+# Brain + drafter: verified download (pinned sha256 + size from models.lock, resume, free-space check, .ready marker).
+# shellcheck source=scripts/setup/lib/verified_download.sh
+source "${ROOT_DIR}/scripts/setup/lib/verified_download.sh"
+LOCK="${ZOE_MODELS_LOCK:-${ROOT_DIR}/models.lock}"
+BASE_URL="${ZOE_MODEL_BASE_URL:-https://huggingface.co/${BRAIN_REPO}/resolve/main}"
 
-hf_download() { # <repo> <local-dir> <include-glob>
-  local repo="$1" dir="$2" include="$3"
-  mkdir -p "$dir"
-  "$HF" download "$repo" --include "$include" --local-dir "$dir"
-}
-
-nonempty() { [[ -s "$1" ]]; }
-
-step "Gemma 4 E4B-QAT brain → ${MODELS_DIR}"
-mkdir -p "$MODELS_DIR"
-
-if nonempty "${MODELS_DIR}/${BRAIN_FILE}"; then
-  ok "brain already present — skipping ($(du -h "${MODELS_DIR}/${BRAIN_FILE}" | cut -f1))"
-else
-  log "Downloading ${BRAIN_FILE} (~4.2 GB) from ${BRAIN_REPO}…"
-  hf_download "$BRAIN_REPO" "$MODELS_DIR" "$BRAIN_FILE"
-  nonempty "${MODELS_DIR}/${BRAIN_FILE}" || die "brain download failed"
-  ok "brain downloaded"
-fi
-
-if nonempty "${MODELS_DIR}/${MTP_FILE}"; then
-  ok "MTP drafter already present — skipping"
-else
-  log "Downloading MTP drafter (${MTP_FILE}) from ${BRAIN_REPO}…"
-  # The drafter lives under MTP/ in the repo; pull it then flatten to the dir root
-  # so it sits next to the brain where llama-server.service expects it.
-  hf_download "$BRAIN_REPO" "$MODELS_DIR" "MTP/*.gguf"
-  if [[ ! -s "${MODELS_DIR}/${MTP_FILE}" ]]; then
-    found="$(find "${MODELS_DIR}/MTP" -maxdepth 1 -iname '*.gguf' 2>/dev/null | head -1 || true)"
-    [[ -n "$found" ]] || die "MTP drafter download failed"
-    mv "$found" "${MODELS_DIR}/${MTP_FILE}"
-    rmdir "${MODELS_DIR}/MTP" 2>/dev/null || true
-  fi
-  ok "MTP drafter downloaded"
-fi
+step "Gemma 4 E4B-QAT brain + MTP drafter → ${MODELS_DIR}"
+verified_download "$MODELS_DIR" "$BRAIN_FILE" "${BASE_URL}/${BRAIN_FILE}" "$LOCK" || exit 1
+verified_download "$MODELS_DIR" "$MTP_FILE" "${BASE_URL}/${MTP_FILE}" "$LOCK" || exit 1
 
 if [[ "$WITH_ROUTER" == "1" ]]; then
   step "FunctionGemma-270M router decoder → ${ROUTER_DIR}"
   if compgen -G "${ROUTER_DIR}/*.gguf" >/dev/null 2>&1; then
     ok "router model already present — skipping"
   else
-    log "Downloading ${ROUTER_REPO} (GGUF)…"
-    hf_download "$ROUTER_REPO" "$ROUTER_DIR" "*.gguf"
+    warn "The router decoder is not pinned (it is replaced by design), so it is not checksum-verified."
+    have_cmd hf || have_cmd huggingface-cli || die "The router download needs the 'hf' tool (pip3 install -U 'huggingface_hub[cli]'), which is not installed."
+    HF="hf"; have_cmd hf || HF="huggingface-cli"
+    mkdir -p "$ROUTER_DIR"
+    "$HF" download "$ROUTER_REPO" --include "*.gguf" --local-dir "$ROUTER_DIR" >/dev/null 2>&1 || true
+    compgen -G "${ROUTER_DIR}/*.gguf" >/dev/null 2>&1 || die "The router decoder download produced no model file; it is built on the box, so skip --with-router."
     ok "router model downloaded"
   fi
 fi
