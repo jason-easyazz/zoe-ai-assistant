@@ -273,6 +273,16 @@ class KernelServer:
     def _op_list_report(self, conn: _Conn, a: dict) -> dict:
         return self.kernel.lists.report(conn.name, a["ask"], a["outcome"], stamps=a.get("stamps"))
 
+    def _op_door_ask(self, conn: _Conn, a: dict) -> dict:
+        """May this person do this verb to this thing, in this area? Allowed: the ask id to report against. Refused: a fixed
+        reason code. ``list_ask`` above is this for the lists area, under its older argument names."""
+        return self.kernel.door.ask(conn.name, a["area"], a["verb"], a["person"], via=a.get("via"), target=a.get("target"),
+                                    parts=a.get("parts", ()), owner=a.get("owner"), visibility=a.get("visibility"),
+                                    turn=a.get("turn"), stamps=a.get("stamps"))
+
+    def _op_door_report(self, conn: _Conn, a: dict) -> dict:
+        return self.kernel.door.report(conn.name, a["ask"], a["outcome"], stamps=a.get("stamps"))
+
     def _op_describe(self, conn: _Conn, a: dict) -> dict:
         """The actions this caller's manifest names that declared their arguments: name, doc,
         params. The brain's tool list is derived from this, never written by hand."""

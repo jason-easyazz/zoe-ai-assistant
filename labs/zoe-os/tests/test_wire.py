@@ -28,7 +28,7 @@ def ok(sock, op, **args):
 def test_the_op_table_is_the_whole_surface():
     # ``list_ask`` / ``list_report``: the lists door (owner decision 2026-11-18, the cut-over plan: the kernel decides and records
     # a list change). Additive: a new op an older kernel refuses as unknown; no existing op changed.
-    assert sorted(wire.OPS) == ["act", "describe", "explain", "forget", "grant", "list_ask", "list_report", "poll", "publish",
+    assert sorted(wire.OPS) == ["act", "describe", "door_ask", "door_report", "explain", "forget", "grant", "list_ask", "list_report", "poll", "publish",
                                 "revoke", "subscribe", "undo"]
     assert wire.VERSION == 1 and wire.MAX_FRAME == 64 * 1024
 

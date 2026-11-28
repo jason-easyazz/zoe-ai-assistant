@@ -1206,15 +1206,15 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
     try:
         import contextlib
 
-        import list_service
+        import kernel_door
         import os_shadow
 
         after_commit: list = []  # a reminder's job / receipt / broadcast: run only once the transaction below has committed
         pool = get_pool()
-        # ZOE_OS_LISTS=kernel only: a list write in here asks the Zoe OS kernel, and its outcome is reported once THIS transaction
-        # has committed (``done``) or rolled back (``failed``), never while the row could still be undone. With the flag off
-        # (one flag read, as at every list door) nothing of the door is entered.
-        reports = list_service.kernel_reports_after() if os_shadow.lists_on() else contextlib.nullcontext()
+        # A Zoe OS door on only (ZOE_OS_LISTS=kernel, ...): a write in here asks the kernel, and its outcome is reported once THIS
+        # transaction has committed (``done``) or rolled back (``failed``), never while the row could still be undone. With every
+        # door off (a flag read per area) nothing of the door is entered.
+        reports = kernel_door.reports_after() if os_shadow.doors_on() else contextlib.nullcontext()
         async with pool.acquire() as conn:
             async with reports, conn.transaction():
                 row = await conn.fetchrow(

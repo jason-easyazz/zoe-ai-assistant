@@ -19,13 +19,12 @@ their list creation, access checks and side effects remain caller-owned.
 
 from __future__ import annotations
 
-import contextvars
 import re
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 import uuid
 from typing import Optional
 
+import kernel_door
 import os_shadow
 import panel_principal
 import write_receipts
@@ -46,46 +45,34 @@ GUEST_CREATABLE_LIST_TYPES = frozenset({"shopping"})
 # ── The Zoe OS lists door (ZOE_OS_LISTS=kernel; docs/architecture/zoe-os-cutover-plan.md, "Changed 2026-11-18") ──────────────────
 # Every function below that writes ``lists`` / ``list_items`` ASKS the kernel first (``_gate``) and REPORTS after its write. The
 # kernel decides and records (ids only); the rows stay here. With the flag at any other value ``_gate`` is one flag read and
-# returns None: no kernel call, no extra query, and every write is exactly what it was.
-class ListRefused(Exception):
+# returns None: no kernel call, no extra query, and every write is exactly what it was. The mechanism every area's door shares
+# (the decision, the refusal, when a report goes out) is ``kernel_door``; what is here is what is the lists' own.
+class ListRefused(kernel_door.Refused):
     """The kernel refused this list change. FINAL: nothing was written. ``reason`` is a closed code (``os_shadow.DOOR_REFUSALS``);
     each caller turns it into its own refusal (``refusal_line`` is the plain sentence they share)."""
 
-    def __init__(self, reason: str = "other") -> None:
-        super().__init__(reason)
-        self.reason = reason
-
-
-_REFUSAL_LINES = {
-    "not_owner": "That list is private to someone else, so I can't change it.",
-    "adults_only": "Only the list's owner or a grown-up can rename, share or delete a household list.",
-    "unknown_person": "I don't know who is asking, so I can't change that list.",
-}
+    area = "lists"
+    lines = {
+        "not_owner": "That list is private to someone else, so I can't change it.",
+        "adults_only": "Only the list's owner or a grown-up can rename, share or delete a household list.",
+        "unknown_person": "I don't know who is asking, so I can't change that list.",
+    }
+    fallback = "I'm not allowed to change that list."
 
 
 def refusal_line(reason: str) -> str:
     """One plain sentence for a refused list change: no names, no list name, no item."""
-    return _REFUSAL_LINES.get(reason, "I'm not allowed to change that list.")
+    return ListRefused(reason).line()
 
 
-@dataclass
-class Decision:
-    """What the kernel said about one list change: ``allow`` | ``refuse`` | ``not_checked`` (the change proceeds) | ``off``."""
-    decision: str
-    reason: str = ""
-    ask: Optional[int] = None
-    reported: bool = False
-    stamps: Optional[dict] = None       # what the ask carried (``os_shadow.erase_stamp`` per member named); its report carries the same
-
-
-_OFF = Decision("off")
-#: allowed asks whose write sits inside a list_service transaction: reported once that transaction has committed (or failed)
-_HELD: contextvars.ContextVar = contextvars.ContextVar("zoe_list_kernel_held", default=None)
-
-
-def _is_panel(user_id: Optional[str]) -> bool:
-    """Nobody identified: the shared panel acting for the house (a guest id, or the household's own owner / viewer id)."""
-    return panel_principal.is_guest_id(user_id) or user_id in (panel_principal.HOUSEHOLD_OWNER_ID, panel_principal.HOUSEHOLD_VIEWER)
+Decision = kernel_door.Decision
+_OFF = kernel_door.OFF
+_HELD = kernel_door._HELD
+_is_panel = kernel_door.is_panel
+report_kernel = kernel_door.report
+_wrote = kernel_door.wrote
+_write = kernel_door.write
+kernel_reports_after = kernel_door.reports_after
 
 
 async def ask_kernel(verb: str, *, user_id: Optional[str], list_id: Optional[str] = None, item_id: Optional[str] = None,
@@ -98,14 +85,7 @@ async def ask_kernel(verb: str, *, user_id: Optional[str], list_id: Optional[str
         verb, "" if _is_panel(user_id) else str(user_id), panel=_is_panel(user_id), list_id=list_id,
         item_ids=(item_id,) if item_id else (), owner=list_owner, household=str(visibility or "") == "family", turn_id=turn_id,
         stamps_at=stamps_at)
-    return Decision(decision, reason, ask, stamps=stamps)
-
-
-def report_kernel(decision: Optional[Decision], outcome: str) -> None:
-    """Close an allowed ask with ``done`` | ``failed`` (once). A no-op for anything that was not an allowed ask."""
-    if decision is not None and decision.decision == "allow" and not decision.reported:
-        decision.reported = True
-        os_shadow.report_list(decision.ask, outcome, decision.stamps)
+    return Decision(decision, reason, ask, stamps=stamps, area="lists")
 
 
 def stamps_now() -> Optional[dict]:
@@ -152,50 +132,6 @@ async def _gate(db, verb: str, *, user_id: Optional[str], list_id: Optional[str]
     if decision.decision == "refuse":
         raise ListRefused(decision.reason)
     return decision
-
-
-def _wrote(decision: Optional[Decision], outcome: str = "done") -> None:
-    """A door's write returned. Inside a list_service transaction the report waits for the commit; otherwise it goes now (a
-    statement on its own has committed)."""
-    if decision is None:
-        return
-    held = _HELD.get()
-    if outcome == "done" and held is not None:
-        held.append(decision)
-    else:
-        report_kernel(decision, outcome)
-
-
-async def _write(decision: Optional[Decision], pending):
-    """Run one door's write and tell the kernel how it ended."""
-    try:
-        result = await pending
-    except BaseException:
-        _wrote(decision, "failed")
-        raise
-    _wrote(decision)
-    return result
-
-
-@asynccontextmanager
-async def kernel_reports_after():
-    """Around a transaction that holds door writes: their reports go out when the block exits (``done``), or ``failed`` if it
-    raised (rolled back). Nested use joins the outer block. With the flag off: one flag read."""
-    if _HELD.get() is not None or not os_shadow.lists_on():
-        yield
-        return
-    held: list = []
-    token = _HELD.set(held)
-    try:
-        yield
-    except BaseException:
-        _HELD.reset(token)
-        for decision in held:
-            report_kernel(decision, "failed")
-        raise
-    _HELD.reset(token)
-    for decision in held:
-        report_kernel(decision, "done")
 
 
 class HouseholdListUnavailable(Exception):

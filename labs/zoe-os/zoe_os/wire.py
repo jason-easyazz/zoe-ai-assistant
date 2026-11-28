@@ -54,13 +54,20 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "undo": {"person": ((str,), True), "actor": ((str,), True)},
     "describe": {},
     "explain": {"seq": ((int,), False), "person": ((str,), False), "last": ((str,), False)},
-    # the lists door (``lists.py``): ids only, never an item's text or a list's name
+    # the lists area of the door (``lists.py``): ids only, never an item's text or a list's name
     "list_ask": {"verb": ((str,), True), "person": ((str,), True), "via": (_OPT_STR, False), "list": (_OPT_STR, False),
                  "items": ((list,), False), "owner": (_OPT_STR, False), "visibility": (_OPT_STR, False),
                  "turn": (_OPT_STR, False),
                  # {member id: [boot, generation]}: the caller's erase stamp for each member this ask names, read when it asked
                  "stamps": ((dict,), False)},
     "list_report": {"ask": ((int,), True), "outcome": ((str,), True), "stamps": ((dict,), False)},
+    # the door, for EVERY area (``door.py``): the same mechanism under area-neutral names (``target`` = the id of the thing
+    # changed, ``parts`` = the ids of its parts). ``list_ask`` / ``list_report`` above are the lists area's older spelling of
+    # these two and stay served, so a caller and a kernel of different ages still understand each other about lists.
+    "door_ask": {"area": ((str,), True), "verb": ((str,), True), "person": ((str,), True), "via": (_OPT_STR, False),
+                 "target": (_OPT_STR, False), "parts": ((list,), False), "owner": (_OPT_STR, False),
+                 "visibility": (_OPT_STR, False), "turn": (_OPT_STR, False), "stamps": ((dict,), False)},
+    "door_report": {"ask": ((int,), True), "outcome": ((str,), True), "stamps": ((dict,), False)},
 }
 
 # error codes (closed)

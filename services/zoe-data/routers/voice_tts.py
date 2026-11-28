@@ -4792,6 +4792,8 @@ async def voice_command(
         _quick_intent = await _detect_async(text, effective_user, context=_ctx)
         if _quick_intent:
             _ctx.activate(_quick_intent.name, getattr(_quick_intent, "slots", {}), text)
+            if panel_id:      # this panel's voice is one conversation: "cancel that" reaches the reminder IT just made, no other's
+                _quick_intent.conversation = f"panel:{panel_id}"
         # (Removed Tier-0.5 LLM classifier.) It produced 0 hits across 7 days of
         # live logs and 0 non-None returns over 41 real missed utterances, while
         # costing a ~1.5s LLM call on every short missed utterance. The Tier-1
