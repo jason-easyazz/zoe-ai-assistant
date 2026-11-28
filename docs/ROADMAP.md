@@ -160,7 +160,7 @@ every item: [nod deep dive](research/nod-deep-dive-2026-11-28.md) (final build o
    switched on, ideally. Everything below stands on it.
 2. **A scenario harness with a simulated household,** the first ten scenarios and a planted-content memory test, so a behaviour
    finding becomes a scenario instead of another review round. Number: the kernel stack took 5 review rounds; real struggling
-   turns to draw from: about 1 wake turn in 5 is misheard then repeated (101 recordings, 31 days). Gate: owner approval before a
+   turns to draw from: wake turns misheard then repeated (8 of 17 wake commands since 2026-11-10; cause under investigation). Gate: owner approval before a
    real turn becomes a scenario (invented stand-ins only); offline, no model judge on the live path.
 3. **Tool-result coaching for the voice brain:** "outcome unknown" on write timeouts, results that name the next step, the
    evidence rule (no "done" without a successful result), a repeat-failure breaker. Number: a timed-out write is reported as
