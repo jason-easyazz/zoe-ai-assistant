@@ -157,7 +157,10 @@ every item: [nod deep dive](research/nod-deep-dive-2026-11-28.md) (final build o
    of the reply (yes / no / other, fresh / stale). An action is asked, approved, running, done or uncertain, and never runs twice;
    a stale or changed yes is refused. Number: pending spoken confirmations are held in memory for 30 s, one per panel, lost on a
    restart, with no record that they ran. Gate: the kernel migration; the voice replay; before home control and messages are
-   switched on, ideally. Everything below stands on it.
+   switched on, ideally. Everything below stands on it. From the exhaustive read (part 4): the record also carries who STARTED the
+   work (work nobody asked for never asks and never acts), a withdrawn flag (a stopped request's pending yes dies with it), a yes
+   bound to one saved question, "did not run" versus "may have run", and for home devices an "uncertain until its state is read"
+   fence, which must exist before home control is switched on.
 2. **A scenario harness with a simulated household,** the first ten scenarios and a planted-content memory test, so a behaviour
    finding becomes a scenario instead of another review round. Number: the kernel stack took 5 review rounds; real struggling
    turns to draw from: wake turns misheard then repeated (8 of 17 wake commands since 2026-11-10; cause under investigation). Gate: owner approval before a
@@ -183,6 +186,8 @@ every item: [nod deep dive](research/nod-deep-dive-2026-11-28.md) (final build o
 9. **First run per member, a live activity line, spoken-style counts** (word cap per reply kind, at most one question, no "done"
    without a kernel record). Gate: item 2 (the counts run in the harness).
 10. **Signed updates, a codes-only fault report, named failure codes.** Needed before a box is sold, not before. Gate: Next 9.
+    Two cheap parts move earlier, for this box now: a hold on automatic kernel and platform package updates, and integrity checks
+    (hash, resume, free space) on the model downloads.
 
 **Also after the kernel migration (from the similar-projects survey, 2026-11-28).** Six items the nod list does not cover; none is
 started. Record: [similar projects](research/similar-projects-2026-11-28.md) (ranked fifteen; the other nine sit under the nod items above).
