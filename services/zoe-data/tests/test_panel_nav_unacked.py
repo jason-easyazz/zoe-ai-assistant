@@ -29,8 +29,8 @@ def _ago(seconds: float) -> str:
 
 
 class _Cursor:
-    def __init__(self, row=None, rows=None):
-        self._row, self._rows = row, rows or []
+    def __init__(self, row=None, rows=None, rowcount=0):
+        self._row, self._rows, self.rowcount = row, rows or [], rowcount
 
     async def fetchone(self):
         return self._row
@@ -42,8 +42,10 @@ class _Cursor:
 class _Db:
     """One panel's previous voice navigate row, as the helper reads and stamps it."""
 
-    def __init__(self, prev=None):
+    def __init__(self, prev=None, older=(), ack_lands_first=False):
         self.prev = prev
+        self.older = [dict(r) for r in older]  # earlier navigates behind `prev`, newest first
+        self.ack_lands_first = ack_lands_first  # the page's ack arrives between the read and the stamp
         self.events: list[str] = []
         self.selects: list[tuple] = []
 
@@ -53,15 +55,23 @@ class _Db:
         if "SELECT id, status, error_message, updated_at" in sql:
             self.events.append("ack_check")
             self.selects.append((sql, params))
-            return _Cursor(row=dict(self.prev) if self.prev else None)
+            assert "LIMIT 5" in sql
+            return _Cursor(rows=[dict(r) for r in ([self.prev] if self.prev else []) + self.older])
         if "FROM ui_actions" in sql:
             return _Cursor(rows=[])
         if "UPDATE ui_actions" in sql and "delivered_unacked" in sql:
-            assert params == (self.prev["id"],)
-            self.prev["error_code"] = "delivered_unacked"
-            self.prev["error_message"] = "Delivered over panel push; the page never acknowledged it"
-            self.events.append("stamped")
-            return _Cursor()
+            assert "status = 'success'" in sql and "error_message = ?" in sql
+            row_id, note = params
+            assert note == voice_tts._NAV_DELIVERED_NOTE
+            target = next(r for r in ([self.prev] if self.prev else []) + self.older if r["id"] == row_id)
+            if self.ack_lands_first:
+                target["error_message"] = None  # what ack_ui_action writes on success
+            if target["status"] != "success" or target["error_message"] != note:
+                return _Cursor(rowcount=0)
+            target["error_code"] = "delivered_unacked"
+            target["error_message"] = "Delivered over panel push; the page never acknowledged it"
+            self.events.append(f"stamped:{row_id}")
+            return _Cursor(rowcount=1)
         if "UPDATE ui_actions" in sql:
             self.events.append(f"delivered:{params}")
             return _Cursor()
@@ -118,7 +128,33 @@ async def test_control_an_acked_or_fresh_navigate_is_silent(make_prev, caplog):
     with caplog.at_level(logging.DEBUG, logger=voice_tts.logger.name):
         assert await voice_tts._note_unacked_voice_nav(db, "panel-x", "nav-now") is False
     assert _lines(caplog) == []
-    assert "stamped" not in db.events
+    assert not [e for e in db.events if e.startswith("stamped")]
+
+
+@pytest.mark.asyncio
+async def test_an_ack_that_lands_between_the_read_and_the_stamp_wins(caplog):
+    """The page acknowledges after the row was read as un-acked: the stamp must not overwrite the ack, and nothing is said.
+
+    Control run 2026-11-28: with the UPDATE made unconditional again (`WHERE id = ?`) the fake applies it and this fails.
+    """
+    db = _Db(_prev(), ack_lands_first=True)
+    with caplog.at_level(logging.DEBUG, logger=voice_tts.logger.name):
+        assert await voice_tts._note_unacked_voice_nav(db, "panel-x", "nav-now") is False
+    assert _lines(caplog) == []
+    assert db.prev["error_message"] is None and "error_code" not in db.prev
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_navigate_behind_one_still_inside_the_grace_is_still_found(caplog):
+    """The newest earlier navigate is 3 s old (inside the grace, skipped); the one before it never got its ack.
+
+    Control run 2026-11-28: with `LIMIT 1` semantics (only the newest row considered) nothing is stamped and this fails.
+    """
+    db = _Db(_prev(id="nav-fresh", updated_at=_ago(3)), older=[_prev(id="nav-stuck", updated_at=_ago(140))])
+    with caplog.at_level(logging.DEBUG, logger=voice_tts.logger.name):
+        assert await voice_tts._note_unacked_voice_nav(db, "panel-x", "nav-now") is True
+    assert len(_lines(caplog)) == 1
+    assert "stamped:nav-stuck" in db.events and "stamped:nav-fresh" not in db.events
 
 
 @pytest.mark.asyncio

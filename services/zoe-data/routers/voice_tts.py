@@ -1615,23 +1615,35 @@ async def _note_unacked_voice_nav(db: Any, panel_id: str, current_action_id: str
                  AND action_type = 'panel_navigate'
                  AND id != ?
                ORDER BY created_at DESC
-               LIMIT 1""",
+               LIMIT 5""",
             (panel_id, current_action_id),
         )
-        row = await cur.fetchone()
-        if not row or row["status"] != "success" or row["error_message"] != _NAV_DELIVERED_NOTE:
+        # The newest earlier navigate that is still only "delivered" AND past the grace: one still inside the grace is
+        # skipped, not forgotten (a later turn looks again), and an older stuck one behind it is still found.
+        row = None
+        age = None
+        for cand in await cur.fetchall():
+            if cand["status"] != "success" or cand["error_message"] != _NAV_DELIVERED_NOTE:
+                continue
+            cand_age = _nav_row_age_s(cand["updated_at"])
+            if cand_age is not None and cand_age < _NAV_UNACKED_GRACE_S:
+                continue
+            row, age = cand, cand_age
+            break
+        if row is None:
             return False
-        age = _nav_row_age_s(row["updated_at"])
-        if age is not None and age < _NAV_UNACKED_GRACE_S:
-            return False
-        logger.warning("PANEL_NAV_UNACKED panel=%s age_s=%d", panel_id, -1 if age is None else int(age))
-        await db.execute(
+        # Conditional: an ack that lands between the read above and this write must win, so the stamp applies only while
+        # the row still carries the delivered note.
+        upd = await db.execute(
             """UPDATE ui_actions
                SET error_code = 'delivered_unacked',
                    error_message = 'Delivered over panel push; the page never acknowledged it'
-               WHERE id = ?""",
-            (row["id"],),
+               WHERE id = ? AND status = 'success' AND error_message = ?""",
+            (row["id"], _NAV_DELIVERED_NOTE),
         )
+        if int(getattr(upd, "rowcount", 1) or 0) == 0:
+            return False
+        logger.warning("PANEL_NAV_UNACKED panel=%s age_s=%d", panel_id, -1 if age is None else int(age))
         await db.commit()
         return True
     except Exception as exc:
