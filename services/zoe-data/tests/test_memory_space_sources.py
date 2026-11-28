@@ -197,8 +197,10 @@ def test_let_go_never_lists_an_unanchored_guess(svc):
 
 
 def test_let_go_is_own_rows_only(svc):
+    """Another member's retired row - including one whose ``wing`` names me, which the store's user_id-OR-wing scope returns -
+    never reaches my list (``pa._owns`` reads ``user_id`` first)."""
     put(svc, "My neighbour keeps a parrot called Biscuit.", user=OTHER)
-    _retire(svc, "Biscuit", user=OTHER, status="superseded")
+    _retire(svc, "Biscuit", user=OTHER, status="superseded", wing=ME)
     r = as_member().get("/api/memories/mine", headers=H)
     assert r.json()["let_go"] == [] and "Biscuit" not in r.text
 

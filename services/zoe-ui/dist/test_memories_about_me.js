@@ -161,7 +161,7 @@ async function check(label, fn) {
         assert(txt.includes(HOSTILE), 'hostile text shown as text');
         assert(txt.includes('I noticed'), 'inferred is marked');
         assert(txt.includes('2 private notes (health)') && !/migraine/i.test(txt), 'private = counts only');
-        assert(e.ids.aboutMe.all(n => n.className && n.className.includes('am-soft')).length === 1, 'inferred row styled soft');
+        assert(e.ids.aboutMe.all(n => n.className && n.className.includes('am-soft') && n.attrs['data-id']).length === 1, 'inferred row styled soft');
         assert.strictEqual(byText(e.ids.aboutMe, 'Forget').length, 3, 'a person has no Forget button here');
     });
 
