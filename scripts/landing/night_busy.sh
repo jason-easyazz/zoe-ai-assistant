@@ -10,6 +10,7 @@
 #   test  : RAM -> pause while the night window or the backup is running.
 # `night_busy.sh deadline` prints the epoch second a voice lander must be GONE by (see below).
 # Test hook: ZOE_LANDING_NOW_EPOCH pretends "now" (the clock is otherwise `date`); ZOE_LANDING_HOME/voice-day-ok is the day gate (today's date, or `always`).
+# One-night override (2026-11-28): $LANDING_HOME/night-skip holding a date lifts the "never ran tonight" fall-backs for ONE night - see skip_night.
 . "$(dirname "${BASH_SOURCE[0]}")/landing_lib.sh"
 kind=${1:-deploy}
 now=$(landing_now); hm=$(date -d "@$now" +%H%M); today=$(date -d "@$now" +%F)
@@ -17,6 +18,18 @@ active(){ s=$(systemctl --user is-active "$1" 2>/dev/null); [ "$s" = active ] ||
 # Has tonight's window finished SUCCESSFULLY? (its last exit is after 02:25 today and it exited 0). 2026-10-26: a REFUSED
 # window (exit 2, e.g. "a voice-PR landing is running") used to count as finished and released every lander - so the night
 # stays paused until the 03:30 fallback, leaving room for a re-run.
+# skip_night N: 0 when $LANDING_HOME/night-skip (whitespace-trimmed) names the night whose early hours fall on date N.
+# The file is normally written in the evening of D for the window that would run at 02:30 on D+1, so it holds D = N-1;
+# one written after midnight holds N itself (`date +%F`), so both are accepted. Anything else (older, future, junk) does nothing.
+# For the owner when tonight's window is CANCELLED (timer stopped): landers/deploys then run through 01:55-03:30, so the night
+# costs its 12B jobs and backup. Deliberately NO `always` token: a standing skip would silently lose every 12B night.
+# Residual: a file dated N written after midnight also covers night N+1 (N+1's "yesterday"); delete it after use.
+# It never lifts: an ACTIVE zoe-night-window.service, an active zoe-voice-regression.service, the backup pause for `test`,
+# the daytime voice gate (voice-day-ok), the lander's household-quiet gate, or the 04:00-04:55 slot held for the nightly replay.
+skip_night(){
+  local f; f=$(tr -d '[:space:]' < "$LANDING_HOME/night-skip" 2>/dev/null)
+  [ -n "$f" ] && { [ "$f" = "$1" ] || [ "$f" = "$(date -d "$1 -1 day" +%F)" ]; }
+}
 finished_tonight(){
   t=$(systemctl --user show zoe-night-window.service -p ExecMainExitTimestamp --value 2>/dev/null)
   rc=$(systemctl --user show zoe-night-window.service -p ExecMainStatus --value 2>/dev/null)
@@ -28,6 +41,8 @@ finished_tonight(){
 # so BOTH must be gone by this instant.
 if [ "$kind" = deadline ]; then
   d=$(date -d "$today 02:20" +%s); [ "$now" -ge "$d" ] && d=$(date -d "$(date -d "$today +1 day" +%F) 02:20" +%s)
+  # a night lifted by night-skip has no 02:20 deadline: print the next real one (the same rule the pauses below use; at most 2 hops)
+  for _ in 1 2; do skip_night "$(date -d "@$d" +%F)" || break; d=$(date -d "$(date -d "$(date -d "@$d" +%F) +1 day" +%F) 02:20" +%s); done
   echo "$d"; exit 0
 fi
 active zoe-night-window.service && exit 0
@@ -44,6 +59,7 @@ case "$kind" in
     if [ "$hm" -ge 0700 ] && [ "$hm" -lt 2200 ] && [ "$dayok" != "$today" ] && [ "$dayok" != always ]; then exit 0; fi
     if [ "$hm" -ge 0155 ] && [ "$hm" -lt 0400 ]; then
       finished_tonight && exit 1
+      skip_night "$today" && exit 1
       # never ran tonight (box was busy/refused?) - stay paused until 03:30 at the latest, then let work resume
       [ "$hm" -lt 0330 ] && exit 0 || exit 1
     fi
@@ -52,6 +68,7 @@ case "$kind" in
   deploy)
     if [ "$hm" -ge 0225 ] && [ "$hm" -lt 0400 ]; then
       finished_tonight && exit 1
+      skip_night "$today" && exit 1
       [ "$hm" -lt 0330 ] && exit 0 || exit 1
     fi
     exit 1 ;;
