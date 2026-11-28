@@ -111,4 +111,4 @@ def test_nothing_new_is_precached():
     for name in ("memories", "about-me", "touch-review-cards", "touch/home"):
         assert name not in block, f"{name} is precached now: bump SW_VERSION and the precache digest"
     home = (DIST / "touch" / "home.html").read_text(encoding="utf-8")
-    assert "/js/touch-review-cards.js?v=rc-2" in home, "the renderer changed: its ?v= must change with it"
+    assert "/js/touch-review-cards.js?v=rc-3" in home, "the renderer changed: its ?v= must change with it"

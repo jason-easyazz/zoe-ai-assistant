@@ -303,3 +303,28 @@ def test_two_overlapping_turns_of_one_member_get_one_tail_and_control(tenv, monk
     verified("s2", panel="panel-2")
     monkeypatch.setattr(nt, "_member_lock", lambda member: asyncio.Lock())
     assert sum(out != "Done." for out in run(both())) == 2
+
+
+def test_a_press_announces_only_the_rows_its_card_showed_so_the_ninth_is_still_spoken_and_control(tenv, monkeypatch):
+    """VOICE PATH: opening a member's card with an orb press tells them the rows ON the card (eight), not every unread row - the
+    ones past the cap were never seen, so the spoken tail still mentions them. Negative control run 2026-11-28: ``panel_open``
+    marking ``unread(ident, limit=50)`` as announced again -> no tail after the press, red here. In-test control: with eight or
+    fewer waiting, the press told them all and the tail stays quiet."""
+    from test_notifications_panel import _client
+
+    seed(10)
+    c = _client(monkeypatch, {"user_id": MEMBER, "role": "user"}, at_panel=False)
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()
+    assert len(frame["items"]) == ns.MAX_CARD and frame["more"] == 2
+    shown = {f"note:{MEMBER}:{i}" for i in range(2, 10)}                                # the eight newest
+    assert ns.ANNOUNCED[MEMBER] == shown
+    verified()
+    out = run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1"))
+    assert out.startswith("Done. You also have 10 notifications.")                    # the ninth and tenth were never seen: spoken
+    nt.reset()                                                                         # control: everything fit on the card
+    for nid in sorted(shown)[:2]:
+        assert run(ns.mark_read(MEMBER, nid))
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()
+    assert len(frame["items"]) == 8 and frame["more"] == 0
+    verified("s2")
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s2")) == "Done."

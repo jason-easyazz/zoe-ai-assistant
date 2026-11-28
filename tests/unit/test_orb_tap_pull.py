@@ -226,7 +226,7 @@ const cmdbar = {classList: {add(){}, remove(){}}}, cmdin = {focus(){}};
 const calls = [];
 const fetch = (url, opts) => { calls.push(url); return Promise.resolve({type: 'opaque'}); };
 const AbortSignal = {timeout: () => undefined};
-const window = {__kiosk: true}, toast = () => {}, toastHide = () => {};
+const window = {__kiosk: true, addEventListener(){}}, toast = () => {}, toastHide = () => {};
 let _convLive = false;
 eval(body);
 orb.click();

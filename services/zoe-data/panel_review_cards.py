@@ -299,6 +299,13 @@ def mint(panel_id: str, member_id: str, kind: str, items: dict, *, choices: Opti
     return tok
 
 
+def peek(token: str) -> Optional[Card]:
+    """The live card behind a token, with NO authorisation: for a caller that applies its own rule (the panel's own notifications
+    card, ``routers/notifications.py``). None = unknown or expired."""
+    card = _CARDS.get(str(token or ""))
+    return card if card is not None and card.expires >= time.monotonic() else None
+
+
 def authorize(token: str, caller: Optional[dict]) -> Card:
     """The card a tap may act on: it exists, it has not expired, and EITHER that member's voice session on that panel is still
     open OR the request carries that member's own session. Anything else is refused (404 unknown, 403 not the member)."""

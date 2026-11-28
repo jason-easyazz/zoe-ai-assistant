@@ -199,7 +199,7 @@ def test_flag_off_the_inbox_is_unchanged(env, monkeypatch):
     monkeypatch.setenv("ZOE_NOTIFICATIONS", "off")
     off = run(r.pending_inbox({"user_id": MEMBER, "role": "user"}))
     assert "notify" in on and "notify" not in off
-    assert off == {k: v for k, v in on.items() if k != "notify"}
+    assert off == {k: v for k, v in on.items() if k not in ("notify", "notify_touch")}
     guest = {"user_id": "guest", "role": "guest"}
     assert "notify_any" not in run(r.pending_inbox(guest))                            # the kiosk boolean is absent too
     monkeypatch.setenv("ZOE_NOTIFICATIONS", "on")
@@ -209,30 +209,31 @@ def test_flag_off_the_inbox_is_unchanged(env, monkeypatch):
 def test_home_paints_the_existing_dot_for_notify():
     html = (SVC.parents[1] / "services/zoe-ui/dist/touch/home.html").read_text()
     assert "var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));" in html
-    assert "paint(mine||!!(d&&!d.quiet&&d.notify_any===true)," in html
+    assert "var any=!!(d&&!d.quiet&&d.notify_any===true);" in html and "paint(mine||any," in html
     assert "notifications-panel.js" not in html                                       # desktop's bell never loads on the estate
 
 
-def test_a_guest_dot_press_opens_the_mic_never_the_voiceless_pull_and_control():
-    """``notify_any`` alone proves no one: /pull carries no voice, so the server refuses the guest and the dot could never be read.
-    The press must open the mic (a verified voice opens the member's session); only a member's own dot runs orbPull."""
+def test_a_notifications_dot_press_opens_the_list_never_the_voiceless_pull_and_control():
+    """``notify_any`` alone proves no one and /pull carries no voice, so the voiceless pull is refused for a dot lit by notifications
+    alone. Since 2026-11-24 that press opens the LIST (POST /api/panel/notifications/open, no mic); only a selector-reported item
+    pulls aloud. Behaviour is pinned in dist/test_touch_review_cards.js (the real orb block in a vm); this pins the wiring."""
     html = (SVC.parents[1] / "services/zoe-ui/dist/touch/home.html").read_text()
     paint = html[html.index("function paint(on,review"):]
     paint = paint[:paint.index("}")]
-    assert "_dotVoiceOnly=!!(on&&voiceOnly)" in paint                                  # set on every paint, cleared with the dot
-    assert "var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);" in html and ",!pullable);" in html
-    # voice-only = nothing the proactive selector reports: the guest's notify_any AND a member's notifications-only dot, because
-    # the voiceless /pull is refused for both
+    assert "_dotVoiceOnly=!!(on&&voiceOnly)" in paint and "_dotNotes=!!(on&&notes)" in paint   # set on every paint, cleared with the dot
+    assert "var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);" in html and ",!pullable,any||" in html
     # ONE press path (orbPress): the orb and Settings > Notifications "Show the card" both run it
     assert "orb.addEventListener('click',function(){orbPress();});" in html
     click = html[html.index("function orbPress(idlePrompt){"):]
     click = click[:click.index("\n  }")]
-    guest, member = click.index("if(ready&&_dotVoiceOnly)panelVoice("), click.index("else if(ready)orbPull();")
-    assert guest < member                                                              # the guest branch wins before any pull
-    assert click.count("orbPull()") == 1                                               # control: a member's own dot still pulls
+    lst, pull = click.index("else if(_listOn&&free&&(idlePrompt||(ready&&_dotNotes)))orbList(idlePrompt);"), click.index("else if(ready)orbPull();")
+    assert lst < pull                                                                  # the list wins before any pull
+    old = click.index("else if(ready&&_dotVoiceOnly)panelVoice(")                      # flag off: the old press, branch for branch
+    assert lst < old < pull and "_listOn=!!(d&&d.notify_touch===true);" in html
+    assert click.count("orbPull()") == 1                                               # control: a selector item still pulls
+    assert "'/api/panel/notifications/open'" in html
 
 
-# -- the card + taps -----------------------------------------------------------------------------------------------------------
 def _fake_repass(monkeypatch, *, confirmed=0, props=("p1",), confirm_status="confirmed"):
     state = {"props": list(props), "confirmed": [], "rejected": []}
 
@@ -300,7 +301,7 @@ def test_proposal_lines_reach_only_the_members_own_panel_card(env, monkeypatch, 
     ((panel, event, frame),) = env.pushed
     assert panel == PANEL and event == "voice_card" and frame["member_id"] == MEMBER and frame["private"] is True
     assert LINE in frame["items"][0]["meta"]
-    assert [a["key"] for a in frame["items"][0]["actions"]] == ["me", "not_me"]
+    assert [a["key"] for a in frame["items"][0]["actions"]] == ["me", "not_me", "clear"]
     assert LINE not in caplog.text
     # an unverified voice / guest turn: no card, no count (control is the call above)
     env.pushed.clear()
@@ -549,3 +550,492 @@ def test_the_runtime_health_tick_runs_the_sync():
            if isinstance(n, ast.AsyncFunctionDef)}
     assert "await _sync_alerting_notice()" in fns["_runtime_health_refresh_loop"]
     assert "sync_alerting_broken()" in fns["_sync_alerting_notice"]
+
+
+# -- the orb press with no voice: the list, clear that stays cleared, a tap that opens something (owner, 2026-11-24) ----------------
+GUEST = {"user_id": "guest", "role": "guest"}
+
+
+def _raw(env, nid, member, type_, title="T", message="M", data="{}", delivered=0):
+    env.conn.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                     (nid, member, type_, title, message, data, delivered, datetime.now(timezone.utc).isoformat()))
+    env.conn.commit()
+
+
+def _client(monkeypatch, caller, *, at_panel):
+    """The card routes with ``caller`` as the request's principal; ``at_panel`` = is the request the registered panel itself."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import panel_principal
+    from routers import notifications as rn
+
+    async def is_panel_guest(request, user, db=None, *, mode=None):
+        return bool(at_panel) and panel_principal.is_guest_id((user or {}).get("user_id"))
+
+    async def panel_of(request, user, db=None):
+        return PANEL if at_panel else ""
+    monkeypatch.setattr(panel_principal, "is_panel_guest", is_panel_guest)
+    monkeypatch.setattr(panel_principal, "panel_of", panel_of)
+    app = FastAPI()
+    assert rn.register(app) is True
+    app.dependency_overrides[rn._caller] = lambda: caller
+    return TestClient(app)
+
+
+def test_receipts_never_light_the_dot_or_fill_the_card_and_control(env):
+    from routers import proactive as r
+    for i, t in enumerate(ns.RECEIPT_TYPES * 20):                                      # 60 "reminder created / snoozed / done" echoes
+        _raw(env, f"r{i}", MEMBER, t, "Reminder Created", "Reminder added: water the fern")
+    assert run(ns.unread_count(MEMBER)) == 0 and run(ns.unread(MEMBER)) == []
+    assert run(r.pending_inbox({"user_id": MEMBER, "role": "user"}))["notify"] == 0
+    assert run(r.pending_inbox(GUEST))["notify_any"] is False
+    assert run(ns.card(PANEL, MEMBER)) is None
+    _raw(env, "due", MEMBER, "reminder", "Reminder", "water the fern")                 # control: a reminder that FIRED is a notification
+    assert run(ns.unread_count(MEMBER)) == 1 and run(r.pending_inbox(GUEST))["notify_any"] is True
+
+
+def test_the_press_shows_the_panel_the_wall_safe_rows_without_a_voice_and_controls(env, monkeypatch):
+    _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    _raw(env, "r1", OTHER, "reminder", "Reminder", "collect the purple parcel")       # a member's own words: never on the wall
+    _raw(env, "s1", MEMBER, "omi_health", "Pendant", "private pendant line", json.dumps({"sensitive": True}))
+    c = _client(monkeypatch, GUEST, at_panel=True)
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": "x"}).json()
+    texts = json.dumps(frame)
+    assert [it["id"] for it in frame["items"]] == ["n1", "locked"] and frame["touch"] is True and frame["private"] is False
+    assert frame["items"][0]["text"] == ns.PANEL_DEVICE_TEXT["omi_health"][0] and frame["items"][0]["open"] == "settings"
+    assert "purple parcel" not in texts and "private pendant line" not in texts        # locked, and sensitive not even counted
+    assert MEMBER not in texts and OTHER not in texts and frame["member_id"] == ""     # never whose
+    assert frame["items"][1]["open"] == "voice" and frame["items"][1]["actions"] == []
+    assert env.pushed == []                                                            # answered to the press, pushed to no screen
+    # controls: the same press from a guest session that is NOT the panel, and with the touch flag off
+    assert _client(monkeypatch, GUEST, at_panel=False).post("/api/panel/notifications/open", json={}).status_code == 403
+
+
+def test_touch_flag_off_is_the_old_press_for_every_caller_and_control(env, monkeypatch):
+    """Off = the route answers as if unmounted for the panel AND for a member's own session, and the inbox poll (what the page
+    already loads) carries no ``notify_touch``, so the page never asks /open at all."""
+    from routers import proactive as r
+    seed(1)
+    _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    member = {"user_id": MEMBER, "role": "user"}
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "off")
+    assert _client(monkeypatch, GUEST, at_panel=True).post("/api/panel/notifications/open", json={}).status_code == 404
+    assert _client(monkeypatch, member, at_panel=False).post("/api/panel/notifications/open", json={}).status_code == 404
+    assert "notify_touch" not in run(r.pending_inbox(GUEST)) and "notify_touch" not in run(r.pending_inbox(member))
+    assert run(r.pending_inbox(GUEST))["notify_any"] is True and run(r.pending_inbox(member))["notify"] == 2   # the dot itself is as before
+    assert env.pushed == [] and prc._CARDS == {}                                       # nothing minted, nothing pushed
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "on")                          # control: the same calls, flag on
+    assert _client(monkeypatch, GUEST, at_panel=True).post("/api/panel/notifications/open", json={}).json()["touch"] is True
+    assert _client(monkeypatch, member, at_panel=False).post("/api/panel/notifications/open", json={}).json()["private"] is True
+    assert run(r.pending_inbox(GUEST))["notify_touch"] is True and run(r.pending_inbox(member))["notify_touch"] is True
+
+
+def test_a_clear_from_the_panel_stays_cleared_and_controls(env, monkeypatch):
+    from routers import proactive as r
+    _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    c = _client(monkeypatch, GUEST, at_panel=True)
+    frame = c.post("/api/panel/notifications/open", json={}).json()
+    h = {"X-Panel-Card": frame["card_token"]}
+    # control: the same token and tap from somewhere that is not the panel is refused and clears nothing
+    away = _client(monkeypatch, GUEST, at_panel=False)
+    assert away.post("/api/panel/notifications/act", json={"item": "n1", "action": "done"}, headers=h).status_code == 403
+    assert env.rows("SELECT delivered FROM notifications")[0][0] == 0
+    with pytest.raises(prc.CardError):                                                 # and no other card route honours a panel token
+        prc.authorize(frame["card_token"], {"user_id": MEMBER, "role": "user"})
+    c = _client(monkeypatch, GUEST, at_panel=True)
+    assert c.post("/api/panel/notifications/act", json={"item": "n1", "action": "done"}, headers=h).json() == {"ok": True}
+    assert env.rows("SELECT delivered, action_taken FROM notifications")[0] == (1, "done_panel")
+    # ... and it STAYS cleared: a reload (a fresh press), the dot's poll, the member's own count, the same creator running again
+    assert c.post("/api/panel/notifications/open", json={}).json().get("empty") is True
+    assert run(r.pending_inbox(GUEST))["notify_any"] is False
+    assert run(r.pending_inbox({"user_id": MEMBER, "role": "user"}))["notify"] == 0
+    env.conn.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered) VALUES ('h1', ?, 'omi_health', 'P', 'M', '{}', 0) "
+                     "ON CONFLICT (id) DO NOTHING", (MEMBER,))
+    assert run(ns.unread_count(MEMBER)) == 0
+
+
+def test_a_cleared_voice_ask_is_not_asked_again_when_the_batch_only_shrinks_and_control(env, monkeypatch):
+    state = _fake_repass(monkeypatch, props=("p1", "p2"))
+    nid = run(ns.notify_wearer_proposals(MEMBER))
+    assert nid and run(ns.mark_read(MEMBER, nid, "later"))                             # the member cleared the ask ("Not now")
+    state["props"].remove("p1")                                                        # one proposal expired: a different batch hash
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None
+    assert run(ns.unread_count(MEMBER)) == 0                                           # cleared stays cleared
+    state["props"].append("p9")                                                        # control: a voice never asked about IS asked
+    assert run(ns.notify_wearer_proposals(MEMBER)) and run(ns.unread_count(MEMBER)) == 1
+
+
+def test_not_now_clears_the_voice_ask_and_leaves_the_proposals_undecided(env, monkeypatch):
+    state = _fake_repass(monkeypatch)
+    run(ns.notify_wearer_proposals(MEMBER))
+    frame = run(ns.card(PANEL, MEMBER))
+    assert [a["key"] for a in frame["items"][0]["actions"]] == ["me", "not_me", "clear"]
+    item = prc._CARDS[frame["card_token"]].items["w1"]
+    assert run(ns.act(MEMBER, item, "clear")) == {"ok": True}
+    assert run(ns.unread_count(MEMBER)) == 0 and state["props"] == ["p1"] and not state["confirmed"] and not state["rejected"]
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None                             # the creator's next pass does not bring it back
+
+
+def test_clear_all_takes_the_rows_that_did_not_fit_and_only_the_cards_own_and_controls(env, monkeypatch):
+    _fake_repass(monkeypatch)
+    run(ns.notify_wearer_proposals(MEMBER))
+    seed(12)
+    seed(2, member=OTHER)
+    _raw(env, "rc", MEMBER, "reminder_created", "Reminder Created", "Reminder added: x")
+    c = _client(monkeypatch, {"user_id": MEMBER, "role": "user"}, at_panel=False)
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()   # the member's own session: their own card
+    assert frame["private"] is True and frame["member_id"] == MEMBER and frame["more"] == 5 and frame["clear_all"] == "Clear all"
+    out = c.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers={"X-Panel-Card": frame["card_token"]})
+    assert out.json() == {"ok": True, "cleared": 13}                                   # all 12, shown or not, and the old receipt
+    assert run(ns.unread_count(MEMBER)) == 1                                           # the voice ask wants an answer: not swept up
+    assert env.rows("SELECT type FROM notifications WHERE user_id = ? AND delivered = 0", (MEMBER,)) == [(ns.WEARER_TYPE,)]
+    assert run(ns.unread_count(OTHER)) == 2                                            # control: another member's rows are untouched
+    # the panel's own clear-all: the household's wall-safe rows, never a member's own words
+    _raw(env, "h1", OTHER, "omi_health", "Pendant", "The pendant battery is low.")
+    _raw(env, "r1", OTHER, "reminder", "Reminder", "collect the purple parcel")
+    k = _client(monkeypatch, GUEST, at_panel=True)
+    kf = k.post("/api/panel/notifications/open", json={}).json()
+    assert k.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers={"X-Panel-Card": kf["card_token"]}).json()["cleared"] == 1
+    left = {r[0] for r in env.rows("SELECT id FROM notifications WHERE user_id = ? AND delivered = 0", (OTHER,))}
+    assert "h1" not in left and "r1" in left and len(left) == 3
+
+
+def test_many_sync_notices_are_one_row_and_one_clear_and_control(env):
+    for i in range(5):
+        _raw(env, f"s{i}", MEMBER, "omi_sync", "Pendant synced", f"I've synced {i + 1} recordings from your pendant.")
+    _raw(env, "a", MEMBER, "note", "A", "one")
+    _raw(env, "b", MEMBER, "note", "A", "two")                                         # control: other kinds are never folded
+    frame = run(ns.card(PANEL, MEMBER))
+    sync = [it for it in frame["items"] if it["text"] == "Pendant synced"]
+    assert len(sync) == 1 and "(and 4 earlier)" in sync[0]["meta"] and len(frame["items"]) == 3
+    item = prc._CARDS[frame["card_token"]].items[sync[0]["id"]]
+    assert run(ns.act(MEMBER, item, "done")) == {"ok": True}
+    assert env.rows("SELECT COUNT(*) FROM notifications WHERE type = 'omi_sync' AND delivered = 0")[0][0] == 0
+    assert run(ns.unread_count(MEMBER)) == 2
+
+
+def test_a_tap_on_a_row_names_what_it_opens_and_controls(env):
+    long = "Telegram is refusing the sign-in of the alert bot. " * 4
+    _raw(env, "1", MEMBER, "reminder", "Reminder", "water the fern")
+    _raw(env, "2", MEMBER, "transcript_check", "Transcript check", "A few words need you.")
+    _raw(env, "3", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    _raw(env, "4", MEMBER, "ops_alerting_broken", "Phone alerts are not getting through", long)
+    _raw(env, "5", MEMBER, "note", "Bins", "tonight", json.dumps({"open": "calendar"}))  # a creator may name an estate screen
+    _raw(env, "6", MEMBER, "note", "Odd", "x", json.dumps({"open": "/people.html"}))     # control: anything else is not a target
+    by = {it["text"]: it for it in run(ns.card(PANEL, MEMBER))["items"]}
+    assert by["Reminder"]["open"] == "reminder" and by["Transcript check"]["open"] == "checks" and by["Pendant"]["open"] == "settings"
+    assert by["Bins"]["open"] == "calendar" and "open" not in by["Odd"] and by["Odd"]["detail"] == "x"
+    alert = by["Phone alerts are not getting through"]
+    assert "open" not in alert and len(alert["detail"]) > len(alert["meta"])            # no screen for it: the row opens out instead
+    # the panel's own card cannot open a member's private screen: there the tap asks for a voice
+    wall = {it["text"]: it for it in run(ns.panel_card(PANEL))["items"]}
+    assert wall[ns.LOCKED_TEXT]["open"] == "voice" and wall["Pendant"]["open"] == "settings"
+    assert set(wall) == {"Pendant", ns.LOCKED_TEXT}                                    # every other kind is inside the locked row
+
+
+def test_every_row_does_something_on_a_tap_and_control(env, monkeypatch):
+    _fake_repass(monkeypatch)
+    run(ns.notify_wearer_proposals(MEMBER))
+    _raw(env, "1", MEMBER, "note", "Short", "hi")                                      # short, no screen: used to have no tap at all
+    _raw(env, "2", MEMBER, "info", "No words", "")
+    _raw(env, "3", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    _raw(env, "4", MEMBER, "ops_alerting_broken", "Phone alerts are not getting through", "short")
+    for frame, n in ((run(ns.card(PANEL, MEMBER)), 5), (run(ns.panel_card(PANEL)), 2)):
+        assert len(frame["items"]) == n
+        for it in frame["items"]:
+            assert bool(it.get("open")) != bool(it.get("detail")), it["text"]           # exactly one of: a screen / the mic, or its words
+    by = {it["text"]: it for it in run(ns.card(PANEL, MEMBER))["items"]}
+    assert by["Short"]["detail"] == "hi" and by["No words"]["detail"] == "No words"    # control: a row with a screen keeps the screen
+    assert by["Pendant"]["open"] == "settings" and "detail" not in by["Pendant"]
+
+
+def test_one_clear_takes_the_whole_sync_backlog_not_a_read_window_and_control(env, monkeypatch):
+    for i in range(55):
+        _raw(env, f"n{i:03d}", MEMBER, "note", f"Note {i}", "m")
+    for i in range(130):                                                               # newest, and far past any 50-row read
+        _raw(env, f"s{i:03d}", MEMBER, "omi_sync", "Pendant synced", "I've synced 2 recordings from your pendant.")
+    _raw(env, "so", OTHER, "omi_sync", "Pendant synced", "I've synced 1 recording from your pendant.")
+    c = _client(monkeypatch, {"user_id": MEMBER, "role": "user"}, at_panel=False)
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()
+    (sync,) = [it for it in frame["items"] if it["text"] == "Pendant synced"]          # folded by kind in SQL: counted over the
+    assert "(and 129 earlier)" in sync["meta"] and len(frame["items"]) == ns.MAX_CARD  # whole table, and the notes still get rows
+    h = {"X-Panel-Card": frame["card_token"]}
+    assert c.post("/api/panel/notifications/act", json={"item": sync["id"], "action": "done"}, headers=h).json() == {"ok": True}
+    left = dict(env.rows("SELECT type, COUNT(*) FROM notifications WHERE user_id = ? AND delivered = 0 GROUP BY type", (MEMBER,)))
+    assert left == {"note": 55}                                                        # every sync row, and control: only that kind
+    assert run(ns.unread_count(OTHER)) == 1                                            # control: and only that member's
+    again = c.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()
+    assert not [it for it in again["items"] if it["text"] == "Pendant synced"]         # it does not come back
+
+
+def test_clear_all_is_one_update_past_every_cap_and_controls(env, monkeypatch):
+    _fake_repass(monkeypatch)
+    run(ns.notify_wearer_proposals(MEMBER))
+    for i in range(520):                                                               # past the panel read's 500
+        _raw(env, f"h{i:03d}", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    for i in range(520):                                                               # newer rows the panel may not clear fill any window
+        _raw(env, f"r{i:03d}", OTHER, "reminder", "Reminder", "collect the purple parcel")
+    _raw(env, "ops", MEMBER, "ops_alerting_broken", "Phone alerts are not getting through", "Telegram is refusing the sign-in.")
+    _raw(env, "tc", MEMBER, "transcript_check", "Transcript check", "A few words need you.")
+    _raw(env, "hs", MEMBER, "omi_health", "Pendant", "private", json.dumps({"sensitive": True}))
+    _raw(env, "hg", "guest", "omi_health", "Pendant", "a guest row")
+    k = _client(monkeypatch, GUEST, at_panel=True)
+    kf = k.post("/api/panel/notifications/open", json={}).json()
+    out = k.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers={"X-Panel-Card": kf["card_token"]}).json()
+    assert out == {"ok": True, "cleared": 520}                                         # every device notice, not the first 500 rows read
+    left = {r[0] for r in env.rows("SELECT id FROM notifications WHERE delivered = 0 AND type <> 'reminder'")}
+    # controls: a member's voice ask and transcript check, the owner alert, a sensitive row and a guest's row are all untouched
+    assert {"ops", "tc", "hs", "hg"} <= left and len(left) == 5
+    assert env.rows("SELECT COUNT(*) FROM notifications WHERE delivered = 0 AND type = 'reminder'")[0][0] == 520
+    m = _client(monkeypatch, {"user_id": OTHER, "role": "user"}, at_panel=False)       # a member's own Clear all: all 520 of theirs
+    mf = m.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()
+    assert m.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers={"X-Panel-Card": mf["card_token"]}).json()["cleared"] == 520
+    assert run(ns.unread_count(OTHER)) == 0 and run(ns.unread_count(MEMBER)) == 4      # control: MEMBER's four are still theirs
+
+
+def test_the_panel_shows_one_uncounted_private_row_for_every_ask_and_alert_and_control(env, monkeypatch):
+    """PRIVACY: at the panel nobody is identified, so a member's asks (confirm this voice, the transcript check) and the owner
+    alert are inside the ONE "Some are private" row - none of their titles or words, no count, however many wait - and its tap
+    opens the mic. Negative control run 2026-11-28: ``panel_card`` showing ``wearer_confirm`` / ``transcript_check`` /
+    ``ops_alerting_broken`` rows again (the three kinds added back to the shown set) -> titles on the card, red here. In-test
+    controls: the device notice is in words with Clear, and the member's own card still shows every one of them."""
+    _fake_repass(monkeypatch)
+    wid = run(ns.notify_wearer_proposals(MEMBER))
+    private = {wid}
+    for i in range(3):                                                                 # several of each, for two members
+        for who in (MEMBER, OTHER):
+            _raw(env, f"tc{i}{who}", who, "transcript_check", "Transcript check", "A few words from last night need you.")
+            _raw(env, f"ops{i}{who}", who, "ops_alerting_broken", "Phone alerts are not getting through", "Telegram is refusing the sign-in.")
+            _raw(env, f"wc{i}{who}", who, ns.WEARER_TYPE, ns.WEARER_TITLE, ns.WEARER_MESSAGE, json.dumps({"proposals": [f"q{i}"]}))
+            private |= {f"tc{i}{who}", f"ops{i}{who}", f"wc{i}{who}"}
+    _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
+    k = _client(monkeypatch, GUEST, at_panel=True)
+    frame = k.post("/api/panel/notifications/open", json={}).json()
+    text = json.dumps(frame)
+    assert [it["text"] for it in frame["items"]] == ["Pendant", ns.LOCKED_TEXT]        # exactly one private row for all nineteen
+    locked = frame["items"][1]
+    assert locked == {"id": "locked", "text": ns.LOCKED_TEXT, "meta": ns.LOCKED_META, "open": "voice", "actions": []}
+    assert frame["more"] == 0 and frame["more_label"] == "" and not any(ch.isdigit() for ch in locked["text"] + locked["meta"])   # no count
+    for words in (ns.WEARER_TITLE, ns.WEARER_MESSAGE, "Transcript check", "last night need you", "Phone alerts", "refusing the sign-in",
+                  "voice", LINE, MEMBER, OTHER):
+        assert words not in text.replace(ns.LOCKED_META, "").replace('"open": "voice"', ""), words
+    held = prc._CARDS[frame["card_token"]].items
+    assert [v["ref"] for v in held.values()] == ["h1"]                                 # only the device notice can be acted on at all
+    h = {"X-Panel-Card": frame["card_token"]}
+    assert k.post("/api/panel/notifications/act", json={"item": "locked", "action": "done"}, headers=h).status_code == 404
+    assert k.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers=h).json()["cleared"] == 1
+    assert {r[0] for r in env.rows("SELECT id FROM notifications WHERE delivered = 0")} == private
+    # with ONLY private kinds waiting the card is the one row alone, the same row for one waiting as for nineteen
+    assert [it["id"] for it in k.post("/api/panel/notifications/open", json={}).json()["items"]] == ["locked"]
+    # controls: the device notice was in words and the panel's to clear; the member's own card names every ask and offers Not now
+    assert frame["items"][0]["meta"] == ns.PANEL_DEVICE_TEXT["omi_health"][1] and frame["items"][0]["actions"] == [{"key": "done", "label": "Clear"}]
+    mine = run(ns.card(PANEL, MEMBER))
+    titles = [it["text"] for it in mine["items"]]
+    assert "Transcript check" in titles and "Phone alerts are not getting through" in titles
+    ask = next(it for it in mine["items"] if it["text"] == ns.WEARER_TITLE)
+    assert [a["key"] for a in ask["actions"]] == ["me", "not_me", "clear"]
+
+
+# ZOE_NOTIFICATIONS_PANEL_TOUCH off must be main. This is what main 75046b677 answered for the rows ``_main_rows`` writes, captured
+# by running that scenario in a ``git archive`` export of 75046b677 (never from this branch): every unread row counts and is
+# listed (the three reminder receipts too), and the three pendant-sync rows are three rows, each with "Done".
+_MAIN_ORDER = [["nt0", "note"], ["sy2", "omi_sync"], ["sy1", "omi_sync"], ["sy0", "omi_sync"], ["rc2", "reminder_acknowledged"],
+               ["rc1", "reminder_snoozed"], ["rc0", "reminder_created"]]
+_MAIN_ROWS = [("A note", "the demo bar is open"), ("Pendant synced", "3 new recordings"), ("Pendant synced", "2 new recordings"),
+              ("Pendant synced", "1 new recordings")] + [("Reminder Created", "Reminder added: water the womble")] * 3
+MAIN_75046B677 = {
+    "kiosk_dot_receipts_only": True, "unread": _MAIN_ORDER, "unread_count": 7, "inbox_notify": 7,
+    "card": {"panel_id": "panel-1", "member_id": "member-a", "kind": "notifications", "private": True, "title": "Notifications",
+             "subtitle": "", "more": 0, "more_label": "", "empty": "No new notifications.", "endpoint": "/api/panel/notifications",
+             "items": [{"id": f"n{i + 1}", "text": t, "meta": m, "actions": [{"key": "done", "label": "Done"}]}
+                       for i, (t, m) in enumerate(_MAIN_ROWS)]},
+    "reg": {f"n{i + 1}": {"type": "note", "ref": nid} for i, (nid, _) in enumerate(_MAIN_ORDER)},
+}
+
+
+def _main_rows(env):
+    """The capture scenario, line for line: three receipts, three pendant-sync rows, one note; what the stores answer for them."""
+    from routers import proactive as r
+
+    def raw(nid, type_, title, message, data, at):
+        env.conn.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) VALUES (?,?,?,?,?,?,0,?)",
+                         (nid, MEMBER, type_, title, message, data, f"2026-11-28T10:00:{at:02d}+00:00"))
+        env.conn.commit()
+    out = {}
+    for i, t in enumerate(("reminder_created", "reminder_snoozed", "reminder_acknowledged")):
+        raw(f"rc{i}", t, "Reminder Created", "Reminder added: water the womble", "{}", i)
+    out["kiosk_dot_receipts_only"] = run(r.pending_inbox(GUEST)).get("notify_any")
+    for i in range(3):
+        raw(f"sy{i}", "omi_sync", "Pendant synced", f"{i + 1} new recordings", json.dumps({"count": i + 1}), 10 + i)
+    raw("nt0", "note", "A note", "the demo bar is open", "{}", 20)
+    out["unread"] = [[n["id"], n["type"]] for n in run(ns.unread(MEMBER, limit=50))]
+    out["unread_count"] = run(ns.unread_count(MEMBER))
+    out["inbox_notify"] = run(r.pending_inbox({"user_id": MEMBER, "role": "user"})).get("notify")
+    frame = run(ns.card(PANEL, MEMBER))
+    out["reg"] = prc._CARDS[frame.pop("card_token")].items
+    out["card"] = frame
+    return out
+
+
+def test_touch_flag_off_answers_what_main_answers_for_receipts_and_repeated_sync_rows_and_control(env, monkeypatch):
+    """Flag off = main 75046b677 for the member's unread rows, count (the spoken tail's number), dot, card and what a tap may
+    touch. Negative controls run 2026-11-28, each red here: ``_receipts_out`` returning the filter always (count 4, not 7);
+    ``card`` without its ``_card_flag_off`` branch (one folded "Clear" row); ``act`` taking "clear" / a folded kind with the flag
+    off; the router's ``clear_all`` without ``touch_enabled()``. In-test control: the same rows with the flag on differ."""
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "off")
+    assert _main_rows(env) == MAIN_75046B677
+    # a card minted while the flag was on does not keep the new acts once it is off: main knew no "Not now", no whole-kind clear
+    with pytest.raises(ns.ActError) as exc:
+        run(ns.act(MEMBER, {"type": "wearer", "ref": "p1", "nid": "x", "batch": []}, "clear"))
+    assert exc.value.status == 400
+    assert run(ns.act(MEMBER, {"type": "note", "ref": "sy2", "kind": "omi_sync"}, "done")) == {"ok": True}
+    assert run(ns.unread_count(MEMBER)) == 6                                           # the one row, not the whole kind
+    c = _client(monkeypatch, {"user_id": MEMBER, "role": "user"}, at_panel=False)
+    tok = run(ns.card(PANEL, MEMBER))["card_token"]
+    assert c.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers={"X-Panel-Card": tok}).status_code == 404
+    assert run(ns.unread_count(MEMBER)) == 6
+    # control: the same rows with the flag on are NOT what main answered (so the comparison above can fail)
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "on")
+    env.conn.execute("DELETE FROM notifications")
+    prc.reset()
+    on = _main_rows(env)
+    assert on["unread_count"] == 4 and on["kiosk_dot_receipts_only"] is False and len(on["card"]["items"]) == 2
+    assert on["card"]["clear_all"] == "Clear all" and on != MAIN_75046B677
+
+
+def test_touch_flag_off_a_cleared_voice_ask_is_asked_again_as_on_main_and_control(env, monkeypatch):
+    """Main asked again when the open batch changed after a clear; "cleared stays cleared" is the flag's. Negative control run
+    2026-11-28: ``notify_wearer_proposals`` reading ``_asked_proposals`` with the flag off -> None here, red."""
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "off")
+    _fake_repass(monkeypatch, props=("p1", "p2"))
+    first = run(ns.notify_wearer_proposals(MEMBER))
+    assert first and run(ns.mark_read(MEMBER, first, "later"))
+    _fake_repass(monkeypatch, props=("p1",))                                           # the batch shrank
+    again = run(ns.notify_wearer_proposals(MEMBER))
+    assert again and again != first
+    monkeypatch.setenv("ZOE_NOTIFICATIONS_PANEL_TOUCH", "on")                          # control: flag on, the shrunk batch is not re-asked
+    assert run(ns.mark_read(MEMBER, again, "later"))
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None
+
+
+SENSITIVE_FORMS = ['{"sensitive": 1}', '{"sensitive": "true"}', '{"sensitive": true}', '{"sensitive":true}', '{"Sensitive": true, "sensitive": 2}',
+                   '{"kind": "low", "sens\\u0069tive": true}',                         # an escaped key json reads as "sensitive"
+                   'not json at all', '{"kind": "low", "sensi', '{"kind": tru}', '[1, 2]', '"words"']
+
+
+@pytest.mark.parametrize("payload", SENSITIVE_FORMS)
+def test_every_truthy_or_unreadable_sensitive_payload_is_kept_off_the_panel_and_control(env, monkeypatch, payload):
+    """PRIVACY: a row is the panel's to show or clear only when its payload provably carries no ``sensitive`` - every truthy form
+    (1, "true", true, no space) and a payload that cannot be read as an object (malformed, cut short) count as sensitive, for
+    the card, for Clear on a folded row and for Clear all. Negative controls run 2026-11-28, each red here: ``_PLAIN`` back to
+    the literal ``'%"sensitive": true%'`` with ``_sealed`` returning False (1 / "true" / malformed shown and cleared);
+    ``_clear_plain`` not re-reading with ``_sealed`` (the escaped key and ``{"kind": tru}`` cleared); ``panel_card`` not dropping
+    ``sealed`` rows (the same two shown). In-test control: the plain rows beside it are shown and cleared."""
+    _raw(env, "hs", MEMBER, "omi_health", "Pendant", "private pendant line", payload)
+    _raw(env, "ss", MEMBER, "omi_sync", "Pendant synced", "private sync line", payload)
+    _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.", json.dumps({"kind": "low"}))
+    _raw(env, "s1", MEMBER, "omi_sync", "Pendant synced", "one new recording", json.dumps({"count": 1}))
+    _raw(env, "h0", MEMBER, "omi_health", "Pendant", "The pendant is nearly full.", None)       # control: no payload at all is plain
+    k = _client(monkeypatch, GUEST, at_panel=True)
+    frame = k.post("/api/panel/notifications/open", json={}).json()
+    text = json.dumps(frame)
+    assert "private pendant line" not in text and "private sync line" not in text and "earlier" not in text
+    assert [it["text"] for it in frame["items"]].count("Pendant") == 2 and "Pendant synced" in text   # control: the plain rows are there
+    held = prc._CARDS[frame["card_token"]].items
+    assert sorted(v["ref"] for v in held.values()) == ["h0", "h1", "s1"]
+    h = {"X-Panel-Card": frame["card_token"]}
+    sync = next(it for it in frame["items"] if it["text"] == "Pendant synced")
+    assert k.post("/api/panel/notifications/act", json={"item": sync["id"], "action": "done"}, headers=h).json() == {"ok": True}
+    assert k.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers=h).json() == {"ok": True, "cleared": 2}
+    assert {r[0] for r in env.rows("SELECT id FROM notifications WHERE delivered = 0")} == {"hs", "ss"}
+
+
+def test_a_false_or_absent_sensitive_key_is_not_hidden_by_the_python_reading_and_the_sql_only_errs_closed():
+    """``_sealed`` is ``is_sensitive``'s truthiness plus fail-closed on an unreadable payload; ``_PLAIN`` (text SQL, one reading on
+    Postgres and SQLite) may only ever be STRICTER. Negative control run 2026-11-28: ``_sealed`` returning False on ValueError."""
+    for raw, sealed in [(None, False), ("", False), ("{}", False), ('{"sensitive": false}', False), ('{"sensitive": 0}', False),
+                        ('{"sensitive": null}', False), ('{"sensitive": ""}', False), ('{"sensitive": 1}', True),
+                        ('{"sensitive": "true"}', True), ('{"sensitive": true}', True), ("{oops", True), ("[]", True), ("7", True)]:
+        assert ns._sealed(raw) is sealed, raw
+        if not sealed and raw:
+            assert ns.is_sensitive({"data": json.loads(raw)}) is False
+    con = sqlite3.connect(":memory:")
+    plain = lambda raw: bool(con.execute(f"SELECT {ns._PLAIN.replace('data', '?')}", (raw,) * ns._PLAIN.count("data")).fetchone()[0])  # noqa: E731
+    assert plain(None) and plain("") and plain("{}") and plain('{"count": 2}')
+    for raw in SENSITIVE_FORMS[:5] + ['{"sensitive": false}', "not json at all", '{"kind": "low", "sensi', "[1, 2]"]:
+        assert not plain(raw), raw
+
+
+def _member_create(monkeypatch, env, member):
+    """The REAL ``POST /api/notifications/`` create route as ``member``: any type, title and message it likes."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from auth import get_current_user
+    from database import get_db
+    from routers import notifications as rn
+
+    async def no_gate(*a, **k):
+        return None
+
+    async def no_broadcast(*a, **k):
+        return None
+    monkeypatch.setattr(rn, "require_feature_access", no_gate)
+    monkeypatch.setattr(rn.broadcaster, "broadcast", no_broadcast)
+    app = FastAPI()
+    app.include_router(rn.router)
+    app.dependency_overrides[get_current_user] = lambda: {"user_id": member, "role": "user"}
+    app.dependency_overrides[get_db] = lambda: env
+    return TestClient(app)
+
+
+def test_a_member_written_device_row_puts_only_fixed_words_on_the_panel_and_control(env, monkeypatch):
+    """PRIVACY: the create route lets a member post ANY type with any words, so the type is no proof the text is fixed. The
+    panel's card says only the fixed words of each device kind (``PANEL_DEVICE_TEXT``) and never reads a stored title or
+    message. Negative control run 2026-11-28: ``panel_card`` rendering device rows with ``_note_item`` (the stored words) again
+    -> the posted words on the kiosk, red here. In-test control: the member's own card still shows the words they posted."""
+    m = _member_create(monkeypatch, env, MEMBER)
+    for t in ns.PANEL_DEVICE_TYPES:
+        r = m.post("/api/notifications/", json={"type": t, "title": f"zebra title {t}", "message": f"the violet secret {t}"})
+        assert r.status_code == 200, r.text
+    frame = _client(monkeypatch, GUEST, at_panel=True).post("/api/panel/notifications/open", json={}).json()
+    text = json.dumps(frame)
+    assert "zebra" not in text and "violet secret" not in text
+    shown = sorted((it["text"], it["meta"]) for it in frame["items"])
+    assert shown == sorted(ns.PANEL_DEVICE_TEXT.values()) and all(it["open"] == "settings" for it in frame["items"])
+    mine = json.dumps(run(ns.card(PANEL, MEMBER)))                                     # control: the member's own card keeps them
+    assert all(f"violet secret {t}" in mine for t in ns.PANEL_DEVICE_TYPES)
+
+
+def test_the_private_row_is_decided_over_the_whole_table_not_the_rows_read_and_control(env, monkeypatch):
+    """PRIVACY / honesty: the "Some are private" row is decided by its own query, so 600 newer device notices (more than the
+    card's 500-row read) cannot hide one older private row. Negative control run 2026-11-28: the decision back to "any
+    non-device row among the rows read" -> no locked row, red here. In-test control: with the private row cleared, no
+    locked row is shown."""
+    _raw(env, "old", MEMBER, "reminder", "Reminder", "an older private reminder")
+    env.conn.executemany("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) "
+                         "VALUES (?, ?, 'omi_health', 'Pendant', 'x', '{}', 0, ?)",
+                         [(f"h{i:04d}", MEMBER, f"2999-01-01T00:{i // 60:02d}:{i % 60:02d}") for i in range(600)])
+    env.conn.commit()
+    ids = [it["id"] for it in run(ns.panel_card(PANEL))["items"]]
+    assert "locked" in ids
+    env.conn.execute("UPDATE notifications SET delivered = 1 WHERE id = 'old'")
+    env.conn.commit()
+    assert "locked" not in [it["id"] for it in run(ns.panel_card(PANEL))["items"]]   # control
+
+
+def test_a_press_announces_a_folded_kind_by_kind_past_any_read_window_and_control(env, monkeypatch):
+    """VOICE PATH: a folded row (``omi_sync``) stands for its whole backlog and its Clear takes the whole kind, so a press marks
+    the WHOLE kind announced - all 600 here, past the old 500-row read. Negative control run 2026-11-28: ``shown_ids`` reading
+    the kind from ``unread(member, limit=500)`` again -> 100 rows not announced, red here. In-test control: a row of another
+    kind past the card's cap is NOT announced."""
+    env.conn.executemany("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) "
+                         "VALUES (?, ?, 'omi_sync', 'Pendant synced', 'x', '{}', 0, ?)",
+                         [(f"s{i:04d}", MEMBER, f"2999-01-01T00:{i // 60:02d}:{i % 60:02d}") for i in range(600)])
+    for i in range(9):
+        _raw(env, f"n{i}", MEMBER, "note", f"Note {i}", "words")
+    c = _client(monkeypatch, {"user_id": MEMBER, "role": "user"}, at_panel=False)
+    frame = c.post("/api/panel/notifications/open", json={"panel_id": PANEL}).json()
+    assert len(frame["items"]) == ns.MAX_CARD
+    told = ns.ANNOUNCED[MEMBER]
+    assert {f"s{i:04d}" for i in range(600)} <= told
+    assert {f"n{i}" for i in range(9)} - told                                          # control: a note past the cap is still untold
