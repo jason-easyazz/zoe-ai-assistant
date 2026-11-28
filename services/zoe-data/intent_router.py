@@ -6218,6 +6218,11 @@ async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional
 
     if _pp.home_control_refused("music media_player"):   # executor backstop (2026-10-18); the intent already refused
         return _pp.HOME_CONTROL_REFUSAL
+    import home_opening as _ho
+
+    # the same door as every other sender to the bridge: a "play <an address>" is adult-only (home_opening.unlisted)
+    if await _ho.refused(payload.get("entity_id"), payload.get("action"), payload.get("data"), via="music"):
+        return _ho.REFUSAL
     try:
         response = await client.post(f"{ha_url}/devices/control", json=payload)
     except Exception as exc:
