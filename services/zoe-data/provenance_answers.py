@@ -583,6 +583,8 @@ class Item:
     origin: str = ""            # the writer that stored it (``origin``, else ``source``): "omi_review" = approved from the day review
     cls: str = ""               # the authority class (``memory_authority.row_class``): user_stated / user_confirmed / ...
     curated_by: str = ""        # a curated row (origin "curator", memories-space P7): the name of who added it
+    #: the row's stored metadata, for the owner's own Memories page (``memory_space``: stage + where it came from). Never said back.
+    meta: Optional[dict] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -675,7 +677,7 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
         origin = str(meta.get("origin") or meta.get("source") or "")
         it = Item(ref.id, text, _row_epoch(meta), group_of(text, meta), primary, inferred, classes,
                   str(meta.get("memory_type") or "").lower(), origin, cls,
-                  str(meta.get("curated_by_name") or "")[:40] if origin == "curator" else "")
+                  str(meta.get("curated_by_name") or "")[:40] if origin == "curator" else "", meta=meta)
         known.total += 1
         if it.sensitive:
             known.private.setdefault(it.sensitive, []).append(it)
