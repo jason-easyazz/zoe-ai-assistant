@@ -491,7 +491,7 @@ All of these were read from the code and not verified live, unless noted.
 - download_gguf_models.sh has no hash, resume or space check. (fetch_speaker_models.sh does pin hashes.)
 - The Telegram bot polls messages only and has only URL buttons, so it cannot receive taps.
 - zoe-data has no host or origin check. nginx may cover this; to confirm.
-- No hold on Linux kernel or L4T auto-updates was found. nod hung its database after a guest kernel update.
+- Kernel and platform auto-updates: checked on the development box afterwards and already covered (the platform packages are held and unattended upgrades are not installed). It remains a requirement for a first-boot image; nod hung its database after a guest kernel update.
 - agent_safety.py lists DNS rebinding as a gap and does not cover WebRTC or QUIC.
 - Spoken PINs are not intercepted before the transcript reaches the brain and stores.
 - Routines store `created_by` but not the words that authorised them.

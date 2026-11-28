@@ -186,8 +186,8 @@ every item: [nod deep dive](research/nod-deep-dive-2026-11-28.md) (final build o
 9. **First run per member, a live activity line, spoken-style counts** (word cap per reply kind, at most one question, no "done"
    without a kernel record). Gate: item 2 (the counts run in the harness).
 10. **Signed updates, a codes-only fault report, named failure codes.** Needed before a box is sold, not before. Gate: Next 9.
-    Two cheap parts move earlier, for this box now: a hold on automatic kernel and platform package updates, and integrity checks
-    (hash, resume, free space) on the model downloads.
+    One cheap part moves earlier: integrity checks (hash, resume, free space) on the model downloads. A hold on automatic kernel
+    and platform updates is already in place on the development box and stays a first-boot requirement.
 
 **Also after the kernel migration (from the similar-projects survey, 2026-11-28).** Six items the nod list does not cover; none is
 started. Record: [similar projects](research/similar-projects-2026-11-28.md) (ranked fifteen; the other nine sit under the nod items above).
