@@ -39,6 +39,7 @@ from moonshine_vad_state import reset_silero_state, transcriber_lib
 import speaker_adaptation
 import speaker_models
 import traffic_class
+import unclear_turn
 import user_erase_gate as _erase_gate
 from voice_speaker_id import _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
@@ -2992,6 +2993,23 @@ def _open_moonshine_stream():
 _STT_SRCS = ("panel", "pendant", "probe", "harness", "other")
 
 
+def _hearing_note_kwargs(text: str, payload: Optional[dict], caller: Optional[dict]) -> dict:
+    """ZOE_UNCLEAR_TURN_NOTE (unclear_turn.py): asked just before the brain is dispatched, i.e. after every fast tier, the STT snap
+    and the device confirm guard passed on the words. ``{"hearing_note": True}`` for the first turn after a WAKE at the PANEL (no
+    follow-up / conversation window, not a member's own session) whose few words may be misheard; ``{}`` (every other turn) leaves
+    the brain call's arguments exactly as they were. The flag is read FIRST: with it off nothing else runs. Never raises."""
+    try:
+        if not unclear_turn.enabled() or (payload or {}).get("window"):
+            return {}
+        import device_confirm   # already loaded: the device confirm guard above imported it on this same turn
+
+        if unclear_turn.noted(text, wake=True, panel=device_confirm.at_the_panel(caller)):
+            return {"hearing_note": True}
+    except Exception as exc:  # noqa: BLE001 - the note is optional; the turn is not
+        logger.debug("hearing note check failed (non-fatal): %s", exc)
+    return {}
+
+
 def _stt_src_tag(src: str = "other", trigger: str = "") -> str:
     """``src=<caller> [trigger=wake|followup]`` for the STT_EMPTY marker, built in the CALLER's task and handed down as an
     argument (the executor thread that logs the marker has none of the request's context variables). A turn the traffic class
@@ -5634,7 +5652,7 @@ async def voice_command(
                     _t_brain_dispatch = time.monotonic()
                     _brain_stream = brain_streaming(
                         text, session_id, user_id=effective_user,
-                        voice_mode=True, **_v_brain_kwargs,
+                        voice_mode=True, **_v_brain_kwargs, **_hearing_note_kwargs(text, payload, caller),
                     )
                     # ZOE_FIRST_SOUND_TOOL_ACK (default OFF): a tool-class brain turn says ONE short cached line NOW,
                     # with the brain request already in flight (prefetched), not when the tool-start sentinel arrives.
@@ -5782,6 +5800,8 @@ async def voice_command(
         _observe_pre_brain_stages(t_chat_start - _t_cmd_start)
         _t_brain_dispatch_nc = time.monotonic()
 
+        _hearing_kwargs_nc = _hearing_note_kwargs(text, payload, caller)
+
         async def _stream_collect() -> None:
             nonlocal _t_first_token
             async for delta in brain_streaming(
@@ -5790,6 +5810,7 @@ async def voice_command(
                 user_id=effective_user,
                 voice_mode=True,
                 **_v_brain_kwargs_nc,
+                **_hearing_kwargs_nc,
             ):
                 if not delta:
                     continue

@@ -103,6 +103,7 @@ import time
 from typing import Any, AsyncIterator, Optional
 from urllib.parse import quote
 import traffic_class
+import unclear_turn   # import-light (lexicon + command-shape helpers only); the turn path calls it only for a flagged turn
 import voice_phrases
 
 logger = logging.getLogger(__name__)
@@ -3526,6 +3527,13 @@ async def _run_flue_brain_streaming_turn(
         hedge_block = _trivia_hedge_block(message, bool(recall_block or continuity_block or every_turn_block))
         if hedge_block:
             brain_message = f"{brain_message}\n{hedge_block}"
+    # Hearing note (ZOE_UNCLEAR_TURN_NOTE, default ON; unclear_turn.py): the panel's voice lane passed ``hearing_note=True`` for the
+    # first words after a wake that nothing claimed and that may be misheard. One delimited line after the user's words; ""
+    # (every other turn) = unchanged bytes, and the module is not called at all: the lane never passes the argument with the flag off.
+    if kwargs.get("hearing_note") is True:
+        hearing_block = unclear_turn.block(True)
+        if hearing_block:
+            brain_message = f"{brain_message}\n{hearing_block}"
     # The household conventions line rides as an envelope the sidecar moves into the system prompt - never inside the user's
     # message, where the brain read it as something the user said (QA round 3b; _LOCALE_ENVELOPE_PREFIX).
     outbound_message = _wrap_message_with_identity(_wrap_message_with_locale(brain_message, _household_locale_line()), uid)

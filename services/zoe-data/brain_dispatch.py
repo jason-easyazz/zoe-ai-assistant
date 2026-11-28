@@ -470,6 +470,8 @@ def _drop_flue_only_kwargs(kwargs: dict) -> None:
     Dropped — but LOUDLY. A caller that asked for write isolation and did not get
     it must not find that out from a dirty database.
     """
+    # ``hearing_note`` (unclear_turn.py): the Flue seam appends one line for it; another lane simply answers without it.
+    kwargs.pop("hearing_note", None)
     if kwargs.pop("replay_isolation", False):
         # FAIL CLOSED (review P1): a caller that asked for write isolation must
         # get a refused turn, never a committed write with a log line. The only
