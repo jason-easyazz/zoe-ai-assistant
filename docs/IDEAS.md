@@ -30,6 +30,22 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - **Core:** [github.com/n8n-io/nod](https://github.com/n8n-io/nod) (Apache-2.0, TypeScript, research preview) — a text-first, one-owner agent; not adopted, no code taken. The one tying idea: a single durable approval-and-outcome record (asked, approved, running, done, or uncertain and never run twice) that approvals, vault uses, payments, errands and "what did Zoe do" all sit on; Zoe's kernel should own it.
 - **Record:** [`research/nod-deep-dive-2026-11-28.md`](research/nod-deep-dive-2026-11-28.md); the order is in [ROADMAP.md](ROADMAP.md) under Later, "After the kernel migration (from the nod study, 2026-11-28)".
 
+### Deep reads of Hermes, OpenClaw, Leon and the voice and memory stacks — the ideas not yet roadmap-ready — 💡 pinned
+- **Core:** third-party projects read at nod depth; nothing adopted, no code taken. The roadmap-ready items are in [ROADMAP.md](ROADMAP.md) under Later, "From the deep reads (2026-11-29)"; record: [`research/deep-reads-2026-11-29.md`](research/deep-reads-2026-11-29.md).
+- **Standing intents** (OpenClaw): "next time I mention X, remind me of Y" as a kernel row matched by keywords with no model call (24 h cooldown, 3 fires, 90 days, cancelled only when asked), plus an arrival trigger; needs the owner's call on who may create one for whom.
+- **Night consolidation as checked operations** (OpenClaw): the 12B returns only add / merge / supersede per candidate, code writes the sourced text, refuses a plan that loses more than 25%, keeps the previous copy.
+- **A constrained second recognizer for wake turns nothing claims** (speech-to-phrase): rescoring against Zoe's own command shapes and the home's names; beside the fixed speech model, never instead; needs an owner decision and RAM measured.
+- **Fine-tune the end-of-turn model on Zoe's own turns** (Smart Turn): her logs already label complete, incomplete and false-close turns; offline at night, judged by the existing kill rule.
+- **A wake verifier on the panel** (OHF voice-support): a small decoder against the wake phrase, background speech and measured confusables, calibrated on the panel's own clips; the third arm after the energy and VAD gates.
+- **Backchannels keep the reply going** (Pipecat): once duck-decide-resume is on, a barge that is only "mhm" or "yeah" resumes and stays out of the history.
+- **Ask before opening the follow-up window?** (Home Assistant): a shadow count of follow-up turns after replies that asked nothing, then decide.
+- **Person merges are proposals** (Graphiti): "<speaker>'s dad" keyed to the speaker, a fuzzy gate for suggestions only, never an automatic same-name merge of people.
+- **An extractor watermark per member, advanced only after a run succeeds** (the inverse of Letta's bug).
+- **The vector index as a derived index** (Hermes): an index failure marks it stale, recall falls back to the database, the canonical write never waits on it, and nothing rebuilds on the live path.
+- **A security rule file built from Zoe's own fixed bugs** (OpenClaw's 145 advisory rules): one blocking rule per fixed bug, starting with "every door and side door calls the kernel" and "no role check on a display name".
+- **"Every skill listed exists"** (Hermes): a names-only listing for the agent lane, so a skill that was not loaded is not declared impossible.
+- **An owner-readable "what you hear, when" page** (linux-voice-assistant `docs/behavior.md`): phase by phase, what the panel plays and what happens to the music.
+
 ### (Jason: annotate) — 💡 pinned
 - **Core:** [youtube.com/watch?v=vy7o1g2iHY8](https://www.youtube.com/watch?v=vy7o1g2iHY8) — *Jason to add the one line: what this sparked.*
 

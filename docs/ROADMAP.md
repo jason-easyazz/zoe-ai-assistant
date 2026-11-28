@@ -1,7 +1,7 @@
 ---
 type: roadmap
 audience: Jason + every agent
-updated: 2026-11-28
+updated: 2026-11-29
 ---
 # Zoe roadmap
 
@@ -150,8 +150,10 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
 ## Later (link list)
 
 **After the kernel migration (from the nod study, 2026-11-28).** Next is full (nine items; three more would pass ten), so this
-order waits here and moves into Next as slots free. All ten start after the Zoe OS migration in Now; none is started. Record for
-every item: [nod deep dive](research/nod-deep-dive-2026-11-28.md) (final build order).
+order waits here and moves into Next as slots free. Most of it waits for the Zoe OS migration in Now, with two exceptions the owner
+asked for directly (2026-11-28): the approval-and-outcome record (item 1) and a first slice of the permissions model (item 5) are being
+built alongside the migration. Nothing in this block has landed. Record for every item: [nod deep dive](research/nod-deep-dive-2026-11-28.md)
+(final build order).
 
 1. **One approval-and-outcome record in the kernel,** with the approval card in voice and panel form and a closed-choice reading
    of the reply (yes / no / other, fresh / stale). An action is asked, approved, running, done or uncertain, and never runs twice;
@@ -204,6 +206,72 @@ started. Record: [similar projects](research/similar-projects-2026-11-28.md) (ra
    negative set (not measured yet). Gate: the wake replay tool.
 6. **What never to remember:** no negative claims about tools, no one-off turned into a standing preference, promotion only after
    recall by two or more distinct queries, no lossy rewrite. Gate: the memory bench.
+
+**From the deep reads (2026-11-29).** Fifteen read-only deep reads of Hermes, OpenClaw, Leon, the voice stacks, turn-taking
+frameworks and memory systems. These are additions to the two blocks above, not a new order: each line says which nod item it joins
+("under item N") or that it is new; the nod order stands. None is started. Faults marked "confirmed" were read in the code, not
+reproduced live. Record: [deep reads](research/deep-reads-2026-11-29.md) (faults table and sources).
+
+- **Under item 1 (the record):** a call is saved before it runs, and an unanswered side-effecting call is "may have run", never re-sent
+  (a closed read-only list decides); accepted input is recorded before the brain is called, and after a restart a turn resumes without
+  replay under its original requester, rechecked, or gets "restarted before it ran"; card rules: expired is not denied, only the
+  requester or an admin answers, never reopened, show the whole action or offer only No, arguments frozen at the yes; two speakers merged
+  into one turn act at the lower authority; a reminder is done only when a device acknowledged it, and a member's result never goes to a
+  guessed panel. Telegram delivery truth: a send that timed out after it left is classed "retry" today (confirmed), so a retry can
+  deliver twice; lost sends become uncertain, with a visible "may be a duplicate" marker; a brain error on Telegram sends one notice
+  instead of nothing (confirmed silent today).
+- **Under item 2 (the harness):** a live-model lane that runs the same scenarios on the real voice brain (errored runs stay in the
+  denominator, infrastructure failures unscored, contested cells from 3 to 6 runs, harm scores 0); scenarios as request-plus-evidence
+  files with an exact marker and a planted decoy; a request cursor so a test asserts which tool the model planned; a recall exam with an
+  anchor list for conversation notes; crash tests that assert the process was alive when killed.
+- **Under item 3 (tool-result coaching):** an empty reply after a write is reported from the write receipt, never "trouble reaching my
+  brain, try again" (confirmed today); an identical-call breaker (note at the 2nd, stop at the 3rd; the existing refusal in
+  `plan_loop.py` is not wired, confirmed); a repetition guard before speech; a refusal says what, why and one next step (the kernel's
+  refusal table has no next step today, confirmed); a golden render of the brain prompt in CI.
+- **Under item 4 (helpers off the voice slot):** the voice turn holds the slot for its whole length, timeouts start at the grant, a
+  background retry re-queues (Leon); scheduled jobs pass code gates before any model call (empty, unchanged since last run, nothing to
+  say), and failures always report; at boot, model work waits behind the voice brain's warm-up and catch-ups run at most 5 at a time;
+  one unattended-run contract for every night-lane prompt.
+- **Under item 5 (What Zoe did, permissions):** when a person's access narrows, their pending confirmations and queued or routine work
+  stop, and widening never widens work already accepted; routines run with their creator's current cells; a routine's standing grant is
+  tied to its exact definition, with a Revoke row; guest grants expire unless "forever" is said (no expiry today, confirmed); a failed
+  routine tells the person who made it, once per cause per day, and clears silently on success; a narrower cell intersects with the
+  defaults, never replaces them.
+- **Under item 8 (skill manifests):** re-installing a manifest is hashed, and a wider ceiling waits for an adult (it is replaced
+  silently today, confirmed); what a skill registers must equal what it declares, checked at load; anything Zoe writes about her own
+  skills is a draft with the previous version kept; install checks fail closed.
+- **Under item 9:** the decline ladder (1, 7, 30 days) keyed on member, kind and subject, a never-re-offer latch and at most 5 pending
+  offers (a flat 24 hours today, confirmed); a busy session queues the next request under its own speaker instead of "Please wait"
+  (confirmed on chat); one event list per voice turn with error codes; a reassurance is a "still", never a result.
+- **Under item 10:** incidents for scheduled jobs (alert once per cause, re-arm on success, an acknowledgement); a label for how the
+  last run ended at boot; deploys restart when idle with a loop breaker; a "Check Zoe" page on the panel (fixable versus needs an adult).
+- **New: late reminders say they are late.** A one-shot reminder found past its grace is spoken with when it was due and recorded as
+  missed; a manual test fire is an extra fire. Today a missed reminder fires at once however late, with no record of the gap
+  (confirmed). Zoe keeps her retry for reminders. Gate: the reminder area's kernel move.
+- **New: the saved reply holds only what was heard.** After a barge-in the panel sends how many sentences played; the server trims the
+  saved reply and notes where it was cut. Today every produced sentence is saved as heard (confirmed in code). Gate: the voice replay; a
+  panel daemon deploy.
+- **New: "stop" during playback ends the reply.** Stop-class words said over a reply end it silently and open no window; the barge kind
+  is logged. Today enders count only in conversation mode (confirmed), so a "stop" over a one-shot reply is treated as a
+  new turn. Gate: the voice replay.
+- **New: one voice session per panel and verified speaker,** guest and unknown kept apart, kept alive only by committed human speech.
+  Today the session is per panel (confirmed). Gate: the voice replay; speaker identity on the turn.
+- **New: wake listener health.** A near-silent microphone for 10 s shows a named fix on the panel and reopens a bounded number of
+  times; the listener arms only when speech recognition and TTS are ready. Gate: a panel daemon deploy.
+- **New: home-command matching before any model,** in the order Home Assistant uses, with the panel's own room winning a name tie, acting
+  only when the reply can say what was done, and precise "no X in this room" errors, folded into the existing snap and fast tiers. Gate:
+  the voice replay.
+- **New: Telegram strangers get one reply a day.** The linking reply goes out at most once per sender per 24 hours, stamped before
+  sending, with one panel notice (today it goes out on every message, confirmed).
+- **Extends the survey's item 2 (memory by when said):** carry the time a fact was said into ingest and resolve "yesterday" against it
+  (today against capture time, confirmed); one date-ordered retire helper for all three retire paths, since write-time supersede also
+  compares no dates (confirmed), with the undated-pair case.
+- **Extends the survey's item 6 (what never to remember):** background memory jobs only add, and any edit or removal is a card pinned to
+  the row it was reviewed against; the grounding and do-not-capture clauses in the person extractor (missing today, confirmed) and digest
+  prompts; finished actions written as finished and uncertain claims marked unverified; a network result taints the rest of the turn for
+  every memory writer; a night candidate holding a secret is rejected, not redacted.
+- **Extends the survey's items 1 and 5 (wake):** a refused wake is silent, logged, keeps its clip and does not start the wake cooldown;
+  energy gate first, the VAD arm second, a verifier third.
 
 **Platform and structure** (deep dive B): A1 (moved from Next 2026-11-14 to keep Next at 10; its open work continues as #2492, #2493 and #2497): Partly landed #2117 (router off the loop; `zoe_event_loop_lag_seconds` on `/metrics`). Not done: 1 s or longer stalls 4 to 16 times a day (2026-11-07 to 11-12) from blockers not yet attributed. Acceptance: the lag marker names what was running, and the 1 s stalls stop. B4 resume the `voice_tts.py` split (leaves first), then a size ratchet test, and plan the `intent_router.py` split (replay on every step; moved from Next 2026-11-14 to keep Next at 10), [B2 harness out of zoe-data](research/architecture-deep-dive-2026-10-18/lane-C-brain-ops-roadmap.md), B5 tool schemas from one registry, B6 flag registry,
 B7 observability and `turn_id`, B9 ops hygiene (track every live unit, container caps, `.env` reaping), [tech-debt plan](architecture/tech-debt-remediation-plan.md) Wave 4
