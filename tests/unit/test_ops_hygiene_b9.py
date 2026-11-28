@@ -33,6 +33,7 @@ def _load(name: str):
 
 inv = _load("unit_inventory")
 health = _load("zoe_health")
+health.MAINT_MARKER = REPO / "no-such-dir" / "OPEN"      # hermetic: never read a live planned-window marker
 reap = _load("reap_env_copies")
 perms = _load("fix_secret_perms")
 vapid = _load("migrate_vapid_keys")
@@ -157,35 +158,41 @@ def test_health_alarms_when_the_night_window_timer_is_not_armed():
     assert bad and not bad[0].ok
     _, st = health.transitions(bad, {})
     lines, _ = health.transitions(bad, st)
-    assert lines and lines[0].startswith("DOWN: night-window timer")
+    assert lines and lines[0].startswith("My overnight routine is switched off.")
+    assert "(zoe-night-window.timer: inactive/enabled)" in lines[0]
+
+
+ZOE_DATA_DOWN = ("I'm not reachable at all. Nothing that talks to me (the panel, the app, chat) can get an answer. "
+                 "It stopped about 5 minutes ago and has not come back by itself. Nothing for you to do yet; it "
+                 "normally restarts by itself, and I'll tell you when it's back. (zoe-data: no-answer)")
 
 
 def test_health_alerts_on_transitions_only():
-    down = [health.Check("zoe-data :8000", False, "URLError")]
-    up = [health.Check("zoe-data :8000", True, "HTTP 200")]
-    lines, st = health.transitions(down, {})
+    down = [health.Check("zoe-data :8000", False, "URLError", code="no-answer")]
+    up = [health.Check("zoe-data :8000", True, "HTTP 200", code="ok")]
+    lines, st = health.transitions(down, {}, now=1000.0)
     assert lines == []                                    # one failure = a restart window, not an outage
-    lines, st = health.transitions(down, st)
-    assert lines == ["DOWN: zoe-data :8000 (URLError)"]
-    lines, st = health.transitions(down, st)
+    lines, st = health.transitions(down, st, now=1300.0)
+    assert lines == [ZOE_DATA_DOWN]
+    lines, st = health.transitions(down, st, now=1600.0)
     assert lines == []                                    # no repeat every 5 minutes
-    lines, st = health.transitions(up, st)
-    assert lines == ["recovered: zoe-data :8000 (HTTP 200)"]
-    lines, _ = health.transitions(up, st)
+    lines, st = health.transitions(up, st, now=1900.0)
+    assert lines == ["I'm reachable again. It was out for 15 minutes."]
+    lines, _ = health.transitions(up, st, now=2200.0)
     assert lines == []
 
 
 def test_an_undelivered_down_alert_stays_pending_and_is_retried():
     """Codex review: 'alerted' was persisted before the send; a failed Telegram send meant the outage was never
     reported. An undelivered DOWN stays pending so the next run sends it."""
-    down = [health.Check("zoe-data :8000", False, "URLError")]
-    _, st = health.transitions(down, {})
-    lines, st2 = health.transitions(down, st)
+    down = [health.Check("zoe-data :8000", False, "URLError", code="no-answer")]
+    _, st = health.transitions(down, {}, now=1000.0)
+    lines, st2 = health.transitions(down, st, now=1300.0)
     assert lines and st2["zoe-data :8000"]["alerted"]
     kept = health.undelivered(st, st2)                 # the send failed
     assert kept["zoe-data :8000"]["alerted"] is False
-    lines, _ = health.transitions(down, kept)
-    assert lines == ["DOWN: zoe-data :8000 (URLError)"], "the next run must retry the alert"
+    lines, _ = health.transitions(down, kept, now=1300.0)
+    assert lines == [ZOE_DATA_DOWN], "the next run must retry the alert"
     # an alert already delivered on an earlier run is not reset by a later failed send
     assert health.undelivered(st2, st2)["zoe-data :8000"]["alerted"] is True
 
@@ -418,7 +425,7 @@ def test_health_alarms_when_the_restore_drill_has_gone_stale():
     assert c and not c[0].ok                                    # in the probe even while the window is open
     _, st = health.transitions(c, {})
     lines, _ = health.transitions(c, st)
-    assert lines and lines[0].startswith("DOWN: restore drill")
+    assert lines and lines[0].startswith("My practice restore from backup has stopped running.")
 
 
 def test_health_restore_drill_probe_runs_the_real_cli(tmp_path):
@@ -439,7 +446,8 @@ def test_health_forget_ledger_red_when_unconfigured_and_names_no_value(monkeypat
     lines, st = health.transitions(bad, {})
     assert lines == []                                                   # the two-failing-runs rule holds
     lines, _ = health.transitions(bad, st)
-    assert len(lines) == 1 and lines[0].startswith("DOWN: forget ledger (unconfigured")
+    assert len(lines) == 1 and lines[0].startswith("Forgetting isn't permanent right now.")
+    assert lines[0].endswith("(forget-ledger: unconfigured)")
     assert "planted-sentinel" not in lines[0] and "planted-sentinel" not in bad[0].detail
     assert "ZOE_FORGET_LEDGER_SALT\")" not in (MAINT / "zoe_health.py").read_text()   # no env read of the secret
     assert health.forget_ledger_check("configured").ok
@@ -456,7 +464,7 @@ def test_health_forget_ledger_unknown_neither_alerts_nor_recovers():
     assert lines == [] and st2 == st                                     # zoe-data down is not a "recovered" ledger
     # negative control: without the skip, an unknown that counts as ok would send a false "recovered"
     lines, _ = health.transitions([health.Check("forget ledger", True, "unknown")], st)
-    assert lines and lines[0].startswith("recovered")
+    assert lines and lines[0].startswith("Forgetting is permanent again.")
 
 
 def test_health_fetch_forget_ledger_reads_only_the_enum(monkeypatch):
