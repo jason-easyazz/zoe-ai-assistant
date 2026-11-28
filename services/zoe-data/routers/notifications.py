@@ -262,14 +262,14 @@ async def _require_press(request: Request, caller=Depends(_caller)) -> tuple[str
 async def panel_open(body: _Open | None = None, press: tuple[str, str] = Depends(_require_press)):
     """The orb PRESS: the notifications card as the answer to a tap - no voice turn, nothing spoken, nothing pushed to any other
     screen. A member's own session gets their own card (all of it). The panel itself (the kiosk guest, nobody identified) gets the
-    household's touch-safe rows in words and one locked row for the rest. ``{"empty": true}`` = nothing to show."""
+    household's device notices in words and one locked row for everything else. ``{"empty": true}`` = nothing to show."""
     said = str((body.panel_id if body else "") or "").strip()[:64]
     who, ident = press
     if who == "member":
         await _store.refresh(ident)
         frame = await _store.card(said or f"touch:{ident}", ident, touch=True)
-        if frame:                                    # the press counts as telling them: the spoken tail does not repeat these
-            _store.ANNOUNCED.setdefault(ident, set()).update(r["id"] for r in await _store.unread(ident, limit=50))
+        if frame:                                    # the press counts as telling them the rows it SHOWED, and only those:
+            _store.ANNOUNCED.setdefault(ident, set()).update(await _store.shown_ids(ident, frame))    # the rest are still spoken
     else:
         await _store._refresh_household()
         frame = await _store.panel_card(ident or said or "kiosk")

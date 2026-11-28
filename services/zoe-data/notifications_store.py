@@ -44,21 +44,13 @@ WEARER_MESSAGE = "I keep hearing the same voice on your pendant. Is it you?"
 RECEIPT_TYPES = ("reminder_created", "reminder_snoozed", "reminder_acknowledged")
 _NO_RECEIPTS = "type NOT IN ('reminder_created', 'reminder_snoozed', 'reminder_acknowledged')"
 COLLAPSE_TYPES = frozenset({"omi_sync"})   # many rows that say one thing: ONE row on the card, and its Done clears them all
-# The panel's own card (an orb press with no voice): who is standing there is unknown. Each kind is judged by ONE question - is it
-# addressed to one member, or is it a notice about the household's kit?
-#   PANEL_DEVICE_TYPES  a notice about a device (the pendant's battery / storage, a finished pendant sync, the panel's speaker ID):
-#                       fixed text, nothing of a member's in it -> shown in words, and anyone at the panel may Clear it.
-#   PANEL_WORDS_ONLY    the owner alert "phone alerts are not getting through": fixed text about Zoe's own alert bot, so it is shown
-#                       in words, but it is addressed to the admins as their second channel -> the panel cannot clear it.
-#   PANEL_TITLE_ONLY    asks addressed to ONE member (confirm this voice, last night's transcript check): the title alone, never the
-#                       stored message, no Clear (dismissing it is that member's "Not now" / their own answer); a tap asks for a voice.
-# Every other kind (a reminder's words, a note Zoe wrote, anything new) is one locked row. A new kind is locked until it is placed.
+# The panel's own card (an orb press with no voice): who is standing there is unknown, so it shows in words ONLY the notices about
+# the household's kit - PANEL_DEVICE_TYPES (the pendant's battery / storage, a finished pendant sync, the panel's speaker ID):
+# fixed text, nothing of a member's in it, and anyone at the panel may Clear it. EVERY other kind - a member's ask (confirm this
+# voice, the transcript check), the owner alert, a reminder's words, a note, anything new - is inside ONE "Some are private" row:
+# no title, no words, no count, so the panel never says which private thing is waiting or how many. A tap on it opens the mic.
 PANEL_MEMBER = "__panel__"         # the ``member_id`` of a card minted for the panel itself; never an account id
 PANEL_DEVICE_TYPES = ("omi_health", "omi_sync", "panel_speaker")
-PANEL_WORDS_ONLY = ("ops_alerting_broken",)
-PANEL_TITLE_ONLY = (WEARER_TYPE, "transcript_check")
-PANEL_SHOWN_TYPES = frozenset(PANEL_DEVICE_TYPES + PANEL_WORDS_ONLY + PANEL_TITLE_ONLY)
-PANEL_TITLE_ONLY_META = "Tap, then say \"what's up?\" so I know it's you."
 # PLAIN = the panel itself may show and clear the row. Text SQL that reads the same on Postgres and SQLite (``data`` is TEXT), and it
 # FAILS CLOSED: no payload, or a JSON object that does not mention "sensitive" anywhere. So every truthy form (true, 1, "true",
 # ``"sensitive":true``) is private, and so is a payload that is not an object (malformed, cut short) - stricter than
@@ -494,7 +486,7 @@ def _open_target(n: dict, household: bool) -> str:
     opens out to its full words). A member's own screen cannot be opened for the panel itself: there it is the mic."""
     want = str((n.get("data") or {}).get("open") or "")
     target = want if want in SCREENS else OPEN_BY_TYPE.get(n["type"], "")
-    if household and (n["type"] in PANEL_TITLE_ONLY or target in ("checks", "reminder", "memories", "person")):
+    if household and target in ("checks", "reminder", "memories", "person"):
         return "voice"
     return target
 
@@ -503,12 +495,9 @@ def _note_item(key: str, n: dict, household: bool) -> dict:
     """One row. EVERY row's words do something on a tap: ``open`` (a screen, or the mic) or ``detail`` (the row opened out to its
     full words). ``n["earlier"]`` = how many more unread rows of a folded kind this one stands for."""
     earlier = int(n.get("earlier") or 0)
-    if household and n["type"] in PANEL_TITLE_ONLY:        # addressed to one member: the title, never the stored message, no Clear
-        return {"id": key, "text": _short(n["title"], 80), "meta": PANEL_TITLE_ONLY_META, "open": "voice", "actions": []}
     msg = " ".join(str(n["message"] or "").split())
-    clear = not household or n["type"] in PANEL_DEVICE_TYPES
     it = {"id": key, "text": _short(n["title"], 80), "meta": _short(msg, 120) + (f" (and {earlier} earlier)" if earlier else ""),
-          "actions": [{"key": "done", "label": "Clear"}] if clear else []}
+          "actions": [{"key": "done", "label": "Clear"}]}
     target = _open_target(n, household)
     if target:
         it["open"] = target
@@ -657,8 +646,8 @@ async def _card_flag_off(panel_id: str, uid: str) -> Optional[dict]:
 
 async def panel_card(panel_id: str) -> Optional[dict]:
     """The PANEL's own card: what an orb press shows when nobody has been identified (the kiosk). See the kinds above
-    ``PANEL_DEVICE_TYPES``: device notices in words with Clear, the owner alert in words, a member's ask as its title alone, every
-    other kind as ONE locked row with no count whose tap opens the mic; never whose. None = nothing to show, the touch flag off, or
+    ``PANEL_DEVICE_TYPES``: device notices in words with Clear, and every other kind (a member's ask and the owner alert too)
+    inside ONE locked row - no title, no words, no count - whose tap opens the mic; never whose. None = nothing to show, the touch flag off, or
     unreadable."""
     if not touch_enabled() or not panel_id:
         return None
@@ -674,13 +663,12 @@ async def panel_card(panel_id: str) -> Optional[dict]:
 
     rows = [n for n in rows if not n["sealed"] and _account(n["user_id"]) and _member(n["user_id"])]
     for n in rows:
-        if n["type"] not in PANEL_SHOWN_TYPES:
+        if n["type"] not in PANEL_DEVICE_TYPES:        # only a device notice is shown, or can be acted on, from the panel
             continue
         key = f"n{len(items) + 1}"
-        if n["type"] in PANEL_DEVICE_TYPES:            # only a device notice can be acted on from the panel
-            reg[key] = _reg_note(n, True)
+        reg[key] = _reg_note(n, True)
         items.append(_note_item(key, n, True))
-    if any(n["type"] not in PANEL_SHOWN_TYPES for n in rows):
+    if any(n["type"] not in PANEL_DEVICE_TYPES for n in rows):
         items.insert(min(len(items), MAX_CARD - 1),    # the locked row always fits
                      {"id": "locked", "text": LOCKED_TEXT, "meta": LOCKED_META, "open": "voice", "actions": []})
     return _frame(panel_id, PANEL_MEMBER, items, reg, private=False, touch=True)
@@ -743,6 +731,20 @@ async def push_card(panel_id: str, member: str) -> int:
     except Exception as exc:  # noqa: BLE001
         logger.debug("notifications: card not pushed (%s)", exc.__class__.__name__)
         return 0
+
+
+async def shown_ids(member: str, frame: dict) -> set:
+    """The notification ids a member's card actually put on the screen: the row behind each item (a wearer ask's own row), and
+    for a folded kind every unread row its one row stands for. A row past the card's cap is NOT here - the member never saw it."""
+    import panel_review_cards as prc
+
+    held = prc.peek(str(frame.get("card_token") or ""))
+    regs = list(held.items.values()) if held is not None else []
+    ids = {str(v.get("nid") or v.get("ref")) for v in regs}
+    kinds = {v["kind"] for v in regs if v.get("kind")}
+    if kinds:
+        ids.update(r["id"] for r in await unread(member, limit=500) if r["type"] in kinds)
+    return ids
 
 
 _WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"}

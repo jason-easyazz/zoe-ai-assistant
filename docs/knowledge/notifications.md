@@ -43,19 +43,21 @@ reply and the brain stream are what they were before this feature (the stream is
 | first creator | `notifications_store.notify_wearer_proposals` | the pendant's wearer print has open proposals and no confirmed print: one `wearer_confirm` notification per batch of proposals ("Please confirm this voice") |
 
 **The panel's own card** (`panel_card`, card member `PANEL_MEMBER`, `private: false`, `touch: true`). Nobody has been identified, so
-each kind is judged by one question - is it addressed to one member, or is it a notice about the household's kit?
+it says in words only what is about the household's kit, and nothing about what waits for a person:
 
-| kind | decided | on the panel's card |
-|---|---|---|
-| `omi_health`, `omi_sync`, `panel_speaker` (`PANEL_DEVICE_TYPES`) | a device notice: fixed text about a pendant's battery / storage, a finished sync, the panel's speaker ID; nothing of a member's in it | words, and anyone at the panel may **Clear** it (and Clear all takes them) |
-| `ops_alerting_broken` (`PANEL_WORDS_ONLY`) | fixed text about Zoe's alert bot, but it is the admins' second channel for an alert that could not reach them | words, **no Clear** from the panel |
-| `wearer_confirm`, `transcript_check` (`PANEL_TITLE_ONLY`) | an ask addressed to ONE member (their voice, their transcripts) | the **title alone** - never the stored message, never what the pendant heard - no Clear (dismissing it is that member's **Not now** / own answer); a tap asks for a voice |
-| every other kind (a fired reminder's words, a note Zoe wrote, `distress_handoff`, any new type) | a member's own | ONE row, "Some are private", no count; a tap opens the mic |
+| kind | on the panel's card |
+|---|---|
+| `omi_health`, `omi_sync`, `panel_speaker` (`PANEL_DEVICE_TYPES`): fixed text about a pendant's battery / storage, a finished sync, the panel's speaker ID; nothing of a member's in it | words, and anyone at the panel may **Clear** it (and Clear all takes them) |
+| EVERY other kind: a member's ask (`wearer_confirm`, `transcript_check`), the owner alert (`ops_alerting_broken`), a fired reminder's words, a note Zoe wrote, `distress_handoff`, any new type | inside ONE row, "Some are private": no title, no words, **no count** (the same row for one waiting as for twenty); a tap opens the mic |
 
-Never whose; sensitive rows are absent, as they are from the kiosk dot. Only a device notice is in the card's token at all, so a
-forged tap on any other row is 404. Its taps are honoured only for the panel itself (`_require_card` applies the panel rule;
-`panel_review_cards.authorize` refuses a panel token everywhere else). A new type is locked until it is placed in one of the
-three sets: fail closed.
+Never whose, never which private thing, never how many; sensitive rows are absent, as they are from the kiosk dot. Only a device
+notice is in the card's token at all, so a forged tap on any other row is 404. Its taps are honoured only for the panel itself
+(`_require_card` applies the panel rule; `panel_review_cards.authorize` refuses a panel token everywhere else). A new type is
+inside the locked row until it is added to `PANEL_DEVICE_TYPES`: fail closed.
+
+**A press tells the member only what it showed.** A member's own press marks as announced the rows ON the card
+(`notifications_store.shown_ids`: each item's row, and every row a folded kind stands for), not every unread row: the ones past
+the card's eight were never seen, so the spoken tail still mentions them.
 
 **The flag.** `ZOE_NOTIFICATIONS_PANEL_TOUCH` = `on` (default) | `off`, read per call. Off = the press is exactly the old one:
 `/api/panel/notifications/open` answers 404 for every caller (a member's own session included), the inbox poll carries no

@@ -729,8 +729,8 @@ def test_a_tap_on_a_row_names_what_it_opens_and_controls(env):
     assert "open" not in alert and len(alert["detail"]) > len(alert["meta"])            # no screen for it: the row opens out instead
     # the panel's own card cannot open a member's private screen: there the tap asks for a voice
     wall = {it["text"]: it for it in run(ns.panel_card(PANEL))["items"]}
-    assert wall["Transcript check"]["open"] == "voice" and wall["Pendant"]["open"] == "settings"
-    assert "Reminder" not in wall and "Bins" not in wall and ns.LOCKED_TEXT in wall
+    assert wall[ns.LOCKED_TEXT]["open"] == "voice" and wall["Pendant"]["open"] == "settings"
+    assert set(wall) == {"Pendant", ns.LOCKED_TEXT}                                    # every other kind is inside the locked row
 
 
 def test_every_row_does_something_on_a_tap_and_control(env, monkeypatch):
@@ -740,8 +740,8 @@ def test_every_row_does_something_on_a_tap_and_control(env, monkeypatch):
     _raw(env, "2", MEMBER, "info", "No words", "")
     _raw(env, "3", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
     _raw(env, "4", MEMBER, "ops_alerting_broken", "Phone alerts are not getting through", "short")
-    for frame in (run(ns.card(PANEL, MEMBER)), run(ns.panel_card(PANEL))):
-        assert len(frame["items"]) >= 4
+    for frame, n in ((run(ns.card(PANEL, MEMBER)), 5), (run(ns.panel_card(PANEL)), 2)):
+        assert len(frame["items"]) == n
         for it in frame["items"]:
             assert bool(it.get("open")) != bool(it.get("detail")), it["text"]           # exactly one of: a screen / the mic, or its words
     by = {it["text"]: it for it in run(ns.card(PANEL, MEMBER))["items"]}
@@ -793,31 +793,45 @@ def test_clear_all_is_one_update_past_every_cap_and_controls(env, monkeypatch):
     assert run(ns.unread_count(OTHER)) == 0 and run(ns.unread_count(MEMBER)) == 4      # control: MEMBER's four are still theirs
 
 
-def test_the_panel_cannot_clear_or_read_an_ask_addressed_to_one_member_and_control(env, monkeypatch):
+def test_the_panel_shows_one_uncounted_private_row_for_every_ask_and_alert_and_control(env, monkeypatch):
+    """PRIVACY: at the panel nobody is identified, so a member's asks (confirm this voice, the transcript check) and the owner
+    alert are inside the ONE "Some are private" row - none of their titles or words, no count, however many wait - and its tap
+    opens the mic. Negative control run 2026-11-28: ``panel_card`` showing ``wearer_confirm`` / ``transcript_check`` /
+    ``ops_alerting_broken`` rows again (the three kinds added back to the shown set) -> titles on the card, red here. In-test
+    controls: the device notice is in words with Clear, and the member's own card still shows every one of them."""
     _fake_repass(monkeypatch)
     wid = run(ns.notify_wearer_proposals(MEMBER))
-    _raw(env, "tc", MEMBER, "transcript_check", "Transcript check", "A few words from last night need you.")
-    _raw(env, "ops", MEMBER, "ops_alerting_broken", "Phone alerts are not getting through", "Telegram is refusing the sign-in.")
+    private = {wid}
+    for i in range(3):                                                                 # several of each, for two members
+        for who in (MEMBER, OTHER):
+            _raw(env, f"tc{i}{who}", who, "transcript_check", "Transcript check", "A few words from last night need you.")
+            _raw(env, f"ops{i}{who}", who, "ops_alerting_broken", "Phone alerts are not getting through", "Telegram is refusing the sign-in.")
+            _raw(env, f"wc{i}{who}", who, ns.WEARER_TYPE, ns.WEARER_TITLE, ns.WEARER_MESSAGE, json.dumps({"proposals": [f"q{i}"]}))
+            private |= {f"tc{i}{who}", f"ops{i}{who}", f"wc{i}{who}"}
     _raw(env, "h1", MEMBER, "omi_health", "Pendant", "The pendant battery is low.")
     k = _client(monkeypatch, GUEST, at_panel=True)
     frame = k.post("/api/panel/notifications/open", json={}).json()
-    by = {it["text"]: it for it in frame["items"]}
     text = json.dumps(frame)
-    for title in (ns.WEARER_TITLE, "Transcript check"):                                # the title alone: no stored message, no Clear
-        assert by[title]["actions"] == [] and by[title]["open"] == "voice" and by[title]["meta"] == ns.PANEL_TITLE_ONLY_META
-    assert ns.WEARER_MESSAGE not in text and "last night need you" not in text and LINE not in text
-    alert = by["Phone alerts are not getting through"]                                 # the owner alert: words, but not the panel's to clear
-    assert alert["actions"] == [] and "refusing the sign-in" in alert["detail"]
+    assert [it["text"] for it in frame["items"]] == ["Pendant", ns.LOCKED_TEXT]        # exactly one private row for all nineteen
+    locked = frame["items"][1]
+    assert locked == {"id": "locked", "text": ns.LOCKED_TEXT, "meta": ns.LOCKED_META, "open": "voice", "actions": []}
+    assert frame["more"] == 0 and frame["more_label"] == "" and not any(ch.isdigit() for ch in locked["text"] + locked["meta"])   # no count
+    for words in (ns.WEARER_TITLE, ns.WEARER_MESSAGE, "Transcript check", "last night need you", "Phone alerts", "refusing the sign-in",
+                  "voice", LINE, MEMBER, OTHER):
+        assert words not in text.replace(ns.LOCKED_META, "").replace('"open": "voice"', ""), words
     held = prc._CARDS[frame["card_token"]].items
     assert [v["ref"] for v in held.values()] == ["h1"]                                 # only the device notice can be acted on at all
     h = {"X-Panel-Card": frame["card_token"]}
-    for it in (by[ns.WEARER_TITLE], by["Transcript check"], alert):
-        assert k.post("/api/panel/notifications/act", json={"item": it["id"], "action": "done"}, headers=h).status_code == 404
+    assert k.post("/api/panel/notifications/act", json={"item": "locked", "action": "done"}, headers=h).status_code == 404
     assert k.post("/api/panel/notifications/act", json={"item": "*", "action": "clear_all"}, headers=h).json()["cleared"] == 1
-    assert {r[0] for r in env.rows("SELECT id FROM notifications WHERE delivered = 0")} == {wid, "tc", "ops"}
-    # control: the device notice was the panel's to clear, and the member's own card still offers Not now on their ask
-    assert by["Pendant"]["actions"] == [{"key": "done", "label": "Clear"}]
+    assert {r[0] for r in env.rows("SELECT id FROM notifications WHERE delivered = 0")} == private
+    # with ONLY private kinds waiting the card is the one row alone, the same row for one waiting as for nineteen
+    assert [it["id"] for it in k.post("/api/panel/notifications/open", json={}).json()["items"]] == ["locked"]
+    # controls: the device notice was in words and the panel's to clear; the member's own card names every ask and offers Not now
+    assert frame["items"][0]["meta"] == "The pendant battery is low." and frame["items"][0]["actions"] == [{"key": "done", "label": "Clear"}]
     mine = run(ns.card(PANEL, MEMBER))
+    titles = [it["text"] for it in mine["items"]]
+    assert "Transcript check" in titles and "Phone alerts are not getting through" in titles
     ask = next(it for it in mine["items"] if it["text"] == ns.WEARER_TITLE)
     assert [a["key"] for a in ask["actions"]] == ["me", "not_me", "clear"]
 
