@@ -184,6 +184,22 @@ every item: [nod deep dive](research/nod-deep-dive-2026-11-28.md) (final build o
    without a kernel record). Gate: item 2 (the counts run in the harness).
 10. **Signed updates, a codes-only fault report, named failure codes.** Needed before a box is sold, not before. Gate: Next 9.
 
+**Also after the kernel migration (from the similar-projects survey, 2026-11-28).** Six items the nod list does not cover; none is
+started. Record: [similar projects](research/similar-projects-2026-11-28.md) (ranked fifteen; the other nine sit under the nod items above).
+
+1. **A false wake makes no sound.** An empty wake turn with no speech in it is logged and dropped without the retry chime. Number:
+   near-miss wake scores on the panel rose about threefold from 2026-11-20 with no deploy. Gate: the voice replay; a panel daemon deploy.
+2. **Conflicting memories are ordered by when they were said, not when they arrived.** Number: none yet (a bench cell first). Gate:
+   the memory bench; "memory must be flawless".
+3. **The wake turn's end-of-speech detector is warmed on the wake audio,** with gain applied to the detector's input only. Gate: the
+   offline turn-ending evaluation, then the voice replay.
+4. **Per-turn keyterm biasing in the speech model** (room devices, the speaker's lists, household names), curated at night; the
+   speech model itself does not change. Gate: the speech-accuracy A/B with zero regressions on chat turns.
+5. **A wake gate and an on-box verifier trained on the panel's own false wakes.** Number: false accepts per hour on a fixed household
+   negative set (not measured yet). Gate: the wake replay tool.
+6. **What never to remember:** no negative claims about tools, no one-off turned into a standing preference, promotion only after
+   recall by two or more distinct queries, no lossy rewrite. Gate: the memory bench.
+
 **Platform and structure** (deep dive B): A1 (moved from Next 2026-11-14 to keep Next at 10; its open work continues as #2492, #2493 and #2497): Partly landed #2117 (router off the loop; `zoe_event_loop_lag_seconds` on `/metrics`). Not done: 1 s or longer stalls 4 to 16 times a day (2026-11-07 to 11-12) from blockers not yet attributed. Acceptance: the lag marker names what was running, and the 1 s stalls stop. B4 resume the `voice_tts.py` split (leaves first), then a size ratchet test, and plan the `intent_router.py` split (replay on every step; moved from Next 2026-11-14 to keep Next at 10), [B2 harness out of zoe-data](research/architecture-deep-dive-2026-10-18/lane-C-brain-ops-roadmap.md), B5 tool schemas from one registry, B6 flag registry,
 B7 observability and `turn_id`, B9 ops hygiene (track every live unit, container caps, `.env` reaping), [tech-debt plan](architecture/tech-debt-remediation-plan.md) Wave 4
 (chat split, typed config; plan untouched since July), [desktop UI overhaul](architecture/desktop-ui-overhaul-plan.md) (function-first waves, not started).
