@@ -62,10 +62,19 @@ async def test_a_members_own_session_never_gets_the_note():
 
 
 async def test_the_kill_switch_restores_todays_turn():
+    """Flag off: the lane reads the flag FIRST and nothing else of the module runs on the turn (each entry point is stubbed to raise;
+    control by hand: the ``enabled()`` check removed from ``_hearing_note_kwargs`` -> the stubbed ``noted`` is reached, its error is
+    swallowed, and with the stub removed the note would ride - the first test's inverse)."""
+    import unclear_turn
+
     rig, mp = _rig("demo_unclear_off", flag="0")
+    reached = []
+    for name in ("noted", "shape", "block"):
+        mp.setattr(unclear_turn, name, lambda *a, _n=name, **k: reached.append(_n))
     try:
         out = await rig.voice("Gribble the womble.")
         assert out.brain_reached and "hearing note" not in _sent(rig)
+        assert reached == [], reached
     finally:
         mp.undo()
 

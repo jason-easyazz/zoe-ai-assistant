@@ -39,6 +39,7 @@ from moonshine_vad_state import reset_silero_state, transcriber_lib
 import speaker_adaptation
 import speaker_models
 import traffic_class
+import unclear_turn
 import user_erase_gate as _erase_gate
 from voice_speaker_id import _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
@@ -2996,12 +2997,13 @@ def _hearing_note_kwargs(text: str, payload: Optional[dict], caller: Optional[di
     """ZOE_UNCLEAR_TURN_NOTE (unclear_turn.py): asked just before the brain is dispatched, i.e. after every fast tier, the STT snap
     and the device confirm guard passed on the words. ``{"hearing_note": True}`` for the first turn after a WAKE at the PANEL (no
     follow-up / conversation window, not a member's own session) whose few words may be misheard; ``{}`` (every other turn) leaves
-    the brain call's arguments exactly as they were. Never raises."""
+    the brain call's arguments exactly as they were. The flag is read FIRST: with it off nothing else runs. Never raises."""
     try:
-        import device_confirm
-        import unclear_turn
+        if not unclear_turn.enabled() or (payload or {}).get("window"):
+            return {}
+        import device_confirm   # already loaded: the device confirm guard above imported it on this same turn
 
-        if unclear_turn.noted(text, wake=not (payload or {}).get("window"), panel=device_confirm.at_the_panel(caller)):
+        if unclear_turn.noted(text, wake=True, panel=device_confirm.at_the_panel(caller)):
             return {"hearing_note": True}
     except Exception as exc:  # noqa: BLE001 - the note is optional; the turn is not
         logger.debug("hearing note check failed (non-fatal): %s", exc)

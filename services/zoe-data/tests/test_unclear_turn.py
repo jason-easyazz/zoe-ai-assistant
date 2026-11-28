@@ -13,7 +13,7 @@ Negative controls (run by hand when written, each went red, then restored):
   ``test_four_more_sound_alikes_have_the_light_shape`` fails.
 * ``unclear_turn.shape`` returning True unconditionally: ``test_clear_words_are_never_called_unclear`` and
   ``test_no_distress_phrase_is_ever_called_unclear`` fail.
-* the ``unclear_turn.block(...)`` hook removed from ``zoe_flue_client`` (``hearing_block = ""``):
+* the ``unclear_turn.block(True)`` hook neutralised in ``zoe_flue_client`` (``hearing_block = ""``):
   ``test_a_flagged_turn_carries_exactly_one_note_after_the_words`` fails (the wire is the unflagged bytes).
 * ``noted`` without the ``wake`` (or the ``enabled()``) clause: ``test_only_the_first_turn_after_a_wake_at_the_panel_is_noted`` fails.
 * ``kwargs.pop("hearing_note", None)`` removed from ``brain_dispatch._drop_flue_only_kwargs``:
@@ -21,6 +21,12 @@ Negative controls (run by hand when written, each went red, then restored):
 * the hearing-note hook moved ABOVE the distress hand-off in ``run_flue_brain_streaming`` cannot happen silently:
   ``test_a_flagged_distress_phrase_still_gets_the_fixed_hand_off_and_the_brain_is_not_asked`` stubs the brain turn to raise, and with
   ``ZOE_DISTRESS_HANDOFF=off`` (the in-suite control) the stub does raise.
+* the distress (or the medical) floor block of ``run_flue_brain_streaming`` moved below the brain call: run IN the suite on a copy of
+  the module (``test_negative_control_a_floor_moved_below_the_brain_call_is_caught``), and by hand on the real file -
+  ``test_each_floor_answers_through_the_real_wrapper_and_the_brain_is_never_started`` goes red for that floor's phrases.
+* ``import unclear_turn`` put back inside the function in either file: ``test_the_module_is_imported_once_at_module_top_never_on_the_turn_path``
+  fails; ``if kwargs.get("hearing_note") is True:`` replaced by an unconditional ``unclear_turn.block(...)`` call:
+  ``test_an_unflagged_turn_never_calls_the_module_in_the_seam`` fails.
 The flag-off cases are in-suite controls.
 """
 from __future__ import annotations
@@ -244,12 +250,179 @@ def test_a_flagged_distress_phrase_still_gets_the_fixed_hand_off_and_the_brain_i
         asyncio.run(go(hearing_note=True))
 
 
-def test_the_note_is_composed_after_the_floors_in_the_seam():
-    """Structure pin: the hearing note has ONE construction site, inside the brain turn, and the distress hand-off and the medical
-    floor are called by the wrapper before that turn starts."""
+# ── 7. the floors answer first: behaviour through the real wrapper, the brain faked ─────────────────────────────────────────────
+
+MEDICAL_PHRASES = ["wren just ate a handful of dishwasher tablet powder what do i do",       # the medical floor's own synthetic cases
+                   "my chest hurts, it feels so tight"]
+FLOOR_CASES = [("distress", t) for t in HANDOFF_PHRASES[:6] + ["I want to die", "quiero morirme"]] + [("medical", t) for t in MEDICAL_PHRASES]
+DISTRESS_BLOCK = ("    import distress_handoff\n\n    _dh = await", "    # The medical safety floor (ZOE_MEDICAL_SAFETY")
+MEDICAL_BLOCK = ("    # The medical safety floor (ZOE_MEDICAL_SAFETY", "    message = _resolve_clarification(message, user_id, session_id)\n")
+BRAIN_CALL = "    turn = _run_flue_brain_streaming_turn(\n"
+AFTER_BRAIN_CALL = "    import role_guess_guard\n\n    turn = role_guess_guard.filter_stream("
+
+
+def _drive(module, monkeypatch, text, **extra):
+    """One turn through ``module.run_flue_brain_streaming`` (the real wrapper) with the brain turn faked. Returns (what was spoken,
+    how many times the brain turn was started)."""
+    import brief_first_turn
+    import restraint
+    from proactive import selector
+
+    calls = []
+
+    def fake_turn(*a, **k):
+        calls.append(a[0] if a else "")
+
+        async def gen():
+            yield "BRAIN-REPLY"
+        return gen()
+
+    async def nothing(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(module, "_run_flue_brain_streaming_turn", fake_turn)
+    monkeypatch.setattr(brief_first_turn, "prepare", nothing)
+    monkeypatch.setattr(selector, "prepare", nothing)
+    monkeypatch.setattr(restraint, "handle_turn", nothing)
+    monkeypatch.setenv("ZOE_HOUSEHOLD_COUNTRY", "AU")
+    dh._NOTIFIED.clear()
+
+    async def go():
+        return [d async for d in module.run_flue_brain_streaming(text, "s1", "demo_bar_1", voice_mode=True, outcome_sink={}, **extra)]
+
+    return asyncio.run(go()), len(calls)
+
+
+def _floor_reply(kind, text):
+    import medical_safety as ms
+
+    dh._NOTIFIED.clear()
+    if kind == "distress":
+        return dh.build_reply(dh.detect(text))
+    return asyncio.run(ms.handle(text, "demo_bar_1", dry=True, voice=True))
+
+
+@pytest.mark.parametrize("kind,text", FLOOR_CASES)
+@pytest.mark.parametrize("extra", [{}, {"hearing_note": True}], ids=["plain", "hearing_note_forced"])
+def test_each_floor_answers_through_the_real_wrapper_and_the_brain_is_never_started(monkeypatch, kind, text, extra):
+    """BEHAVIOUR, not source: a distress phrase (the labelled set) and a medical one (the medical floor's own cases) go through the
+    real ``run_flue_brain_streaming``. The floor's fixed reply is the ONLY thing spoken, the brain turn is never started, and a
+    forced ``hearing_note`` changes neither - the note is composed inside the brain turn that never runs.
+    Negative control (run by hand on the real ``zoe_flue_client.py``, then restored): the distress block moved below the brain call
+    -> all 16 distress cases red; the medical block moved below it -> all 4 medical cases red. Also in-suite on a copy, below."""
+    monkeypatch.setenv("ZOE_HOUSEHOLD_COUNTRY", "AU")       # the same household for the expected line and the driven turn
+    want = _floor_reply(kind, text)
+    assert want and "catch" not in want.lower()
+    spoken, brain_starts = _drive(zc, monkeypatch, text, **extra)
+    assert brain_starts == 0, f"the brain was started on a {kind} turn"
+    assert spoken == [want] and "BRAIN-REPLY" not in spoken and "hearing note" not in spoken[0]
+
+
+def test_control_an_ordinary_turn_does_start_the_faked_brain(monkeypatch):
+    spoken, brain_starts = _drive(zc, monkeypatch, "Tell me about marble runs")
+    assert brain_starts == 1 and spoken == ["BRAIN-REPLY"]
+
+
+def _wrapper_with_floor_below_the_brain_call(block):
+    """A copy of the seam module whose distress (or medical) floor is MOVED below the brain call. The real file is untouched."""
+    import types
+
     src = Path(zc.__file__).read_text(encoding="utf-8")
-    assert src.count('unclear_turn.block(kwargs.get("hearing_note"))') == 1
+    start, end = src.index(block[0]), src.index(block[1])
+    assert 0 < start < end < src.index(BRAIN_CALL) and src.count(AFTER_BRAIN_CALL) == 1
+    moved = src[start:end]
+    mutated = (src[:start] + src[end:]).replace(AFTER_BRAIN_CALL, moved + AFTER_BRAIN_CALL)
+    mod = types.ModuleType("zoe_flue_client_floor_moved")
+    mod.__file__ = zc.__file__
+    exec(compile(mutated, zc.__file__, "exec"), mod.__dict__)
+    return mod
+
+
+@pytest.mark.parametrize("kind,block,text", [("distress", DISTRESS_BLOCK, "I want to die"), ("medical", MEDICAL_BLOCK, MEDICAL_PHRASES[0])])
+def test_negative_control_a_floor_moved_below_the_brain_call_is_caught(monkeypatch, kind, block, text):
+    """The in-suite control for the test above: with the floor moved BELOW the brain call the brain turn IS started on the same
+    phrase, so ``brain_starts == 0`` (the assertion above) fails for that mutant - and passes for the real module."""
+    assert _drive(zc, monkeypatch, text)[1] == 0
+    mutant = _wrapper_with_floor_below_the_brain_call(block)
+    _spoken, brain_starts = _drive(mutant, monkeypatch, text)
+    assert brain_starts == 1, f"moving the {kind} floor below the brain call was NOT detected"
+
+
+# ── 8. the flag is read first; an unflagged turn never calls the module ──────────────────────────────────────────────────────────
+
+def _function_level_imports(path, name):
+    import ast
+
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    hits = []
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Import) and any(a.name == name for a in node.names):
+                    hits.append(fn.name)
+                if isinstance(node, ast.ImportFrom) and node.module == name:
+                    hits.append(fn.name)
+    top = [n for n in tree.body if isinstance(n, ast.Import) and any(a.name == name for a in n.names)]
+    return hits, len(top)
+
+
+def test_the_module_is_imported_once_at_module_top_never_on_the_turn_path():
+    here = Path(zc.__file__).parent
+    for path in (here / "zoe_flue_client.py", here / "routers" / "voice_tts.py"):
+        nested, top = _function_level_imports(path, "unclear_turn")
+        assert nested == [] and top == 1, (path.name, nested, top)
+
+
+def test_importing_the_module_is_light_and_reads_no_flag():
+    """Import-time: no floor / affect module, no seam, no environment read (the flag is read per call, in ``enabled``)."""
+    import subprocess
+    import sys
+
+    code = ("import os, sys\n"
+            "class Env(dict):\n"
+            "    def __getitem__(s, k): raise AssertionError('env read at import: ' + k)\n"
+            "    def get(s, k, d=None): raise AssertionError('env read at import: ' + k)\n"
+            "before = set(sys.modules)\n"
+            "real = os.environ; os.environ = Env()\n"
+            "import unclear_turn\n"
+            "os.environ = real\n"
+            "new = set(sys.modules) - before\n"
+            "bad = {'distress_handoff', 'emotional_turn_guard', 'medical_safety', 'zoe_flue_client', 'typed_env', 'flag_registry'} & new\n"
+            "assert not bad, bad\n"
+            "print('ok')\n")
+    out = subprocess.run([sys.executable, "-c", code], cwd=str(Path(zc.__file__).parent), capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and out.stdout.strip() == "ok", out.stderr[-400:]
+
+
+def test_flag_off_decides_without_touching_the_words(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("the shape must not run with the flag off")
+
+    monkeypatch.setattr(ut, "shape", boom)
+    monkeypatch.setenv(ut.FLAG, "0")
+    assert ut.noted("Gribble the womble.", wake=True, panel=True) is False
+    monkeypatch.delenv(ut.FLAG)                       # control: flag on, the shape IS consulted (and the stub raises inside noted -> False + a warning)
+    called = []
+    monkeypatch.setattr(ut, "shape", lambda t: called.append(t) or True)
+    assert ut.noted("Gribble the womble.", wake=True, panel=True) is True and called == ["Gribble the womble."]
+
+
+def test_an_unflagged_turn_never_calls_the_module_in_the_seam(sent, monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("unclear_turn must not be called on a turn the lane did not flag")
+
+    for name in ("block", "enabled", "shape", "noted"):
+        monkeypatch.setattr(ut, name, boom)
+    assert "hearing note" not in sent("Gribble the womble.")          # no argument = the module is never entered
+    assert "hearing note" not in sent("Gribble the womble.", hearing_note=False)
+
+
+def test_the_note_has_one_construction_site_inside_the_brain_turn():
+    """Structure pin for the NOTE only; the floors' order is pinned by behaviour in section 7, not by source. Control by hand: a
+    second ``unclear_turn.block(True)`` pasted into the wrapper -> red."""
+    src = Path(zc.__file__).read_text(encoding="utf-8")
+    assert src.count("unclear_turn.block(True)") == 1 and src.count('if kwargs.get("hearing_note") is True:') == 1
     wrapper = src[src.index("async def run_flue_brain_streaming("):src.index("async def _run_flue_brain_streaming_turn(")]
-    assert "distress_handoff.handle(" in wrapper and "medical_safety.handle(" in wrapper and "unclear_turn" not in wrapper
+    assert "unclear_turn" not in wrapper
     voice = (Path(zc.__file__).parent / "routers" / "voice_tts.py").read_text(encoding="utf-8")
     assert voice.count("_hearing_note_kwargs(text, payload, caller)") == 2    # the streaming and the one-shot brain dispatch
